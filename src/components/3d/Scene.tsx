@@ -1,0 +1,616 @@
+import { Canvas, useThree } from '@react-three/fiber';
+import { OrbitControls, Grid, Environment, PerspectiveCamera, useGLTF, TransformControls } from '@react-three/drei';
+import { useLoader } from '@react-three/fiber';
+// type-only declarations are provided in src/types/three-extensions.d.ts
+import { STLLoader } from 'three/examples/jsm/loaders/STLLoader';
+import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader';
+import { useState, useCallback, useRef, Suspense, useEffect } from 'react';
+import * as THREE from 'three';
+
+type SceneComponent = {
+  id: string;
+  componentId: number;
+  name: string;
+  category: string;
+  glb_url?: string | null;
+  original_url?: string | null;
+  bounding_box?: any;
+  center?: any;
+  position: [number, number, number];
+  rotation?: [number, number, number];
+};
+
+interface SceneProps {
+  onSelectComponent: (id: string) => void;
+  viewMode?: 'focused' | 'shopfloor';
+  components?: SceneComponent[];
+  onAddComponent?: (component: Omit<SceneComponent, 'id'>) => void;
+  onUpdateComponent?: (id: string, update: Partial<SceneComponent>) => void;
+  activeTool?: string; // Tool from toolbar: 'select', 'move', 'rotate'
+}
+
+// Component to render GLB models
+function GLBModelContent({ url, position, rotation, selected, onSelect }: { 
+  url: string; 
+  position: [number, number, number]; 
+  rotation?: [number, number, number];
+  selected?: boolean;
+  onSelect?: () => void;
+}) {
+  console.log(`GLBModelContent: Loading GLB from ${url}`);
+  
+  // useGLTF throws a promise during loading (handled by Suspense)
+  // Don't wrap in try-catch - let Suspense handle the promise
+  const { scene } = useGLTF(url);
+  
+  if (!scene) {
+    console.error(`GLBModelContent: Scene is null for ${url}`);
+    return null;
+  }
+  
+  console.log(`GLBModelContent: Successfully loaded GLB from ${url}`);
+  
+  return (
+    <primitive
+      object={scene.clone()}
+      onClick={onSelect}
+      onPointerOver={(e: any) => {
+        e.stopPropagation();
+        document.body.style.cursor = 'pointer';
+      }}
+      onPointerOut={() => {
+        document.body.style.cursor = 'default';
+      }}
+    />
+  );
+}
+
+function GLBModel(props: { 
+  url: string; 
+  position: [number, number, number]; 
+  rotation?: [number, number, number];
+  selected?: boolean;
+  onSelect?: () => void;
+}) {
+  return (
+    <Suspense 
+      fallback={
+        <mesh position={props.position}>
+          <boxGeometry args={[1, 1, 1]} />
+          <meshStandardMaterial color="orange" transparent opacity={0.5} />
+        </mesh>
+      }
+    >
+      <GLBModelContent {...props} />
+    </Suspense>
+  );
+}
+
+// Fallback placeholder for components without GLB
+function ComponentPlaceholder({ 
+  position, 
+  bounding_box, 
+  category, 
+  selected, 
+  onSelect 
+}: { 
+  position: [number, number, number]; 
+  bounding_box?: any;
+  category: string;
+  selected?: boolean;
+  onSelect?: () => void;
+}) {
+  const size = bounding_box ? [
+    (bounding_box.max?.[0] || 1) - (bounding_box.min?.[0] || 0),
+    (bounding_box.max?.[1] || 1) - (bounding_box.min?.[1] || 0),
+    (bounding_box.max?.[2] || 1) - (bounding_box.min?.[2] || 0),
+  ] : [1, 1, 1];
+
+  return (
+    <mesh
+      position={position}
+      onClick={onSelect}
+      onPointerOver={(e: any) => {
+        e.stopPropagation();
+        document.body.style.cursor = 'pointer';
+      }}
+      onPointerOut={() => {
+        document.body.style.cursor = 'default';
+      }}
+    >
+      <boxGeometry args={size as [number, number, number]} />
+      <meshStandardMaterial 
+        color={selected ? "#00b4d8" : "#666666"} 
+        metalness={0.6} 
+        roughness={0.4}
+        transparent
+        opacity={0.7}
+      />
+    </mesh>
+  );
+}
+
+// STL loader mesh with Suspense
+function STLModelContent({ url, position, rotation, selected, onSelect }: { 
+  url: string; 
+  position: [number, number, number]; 
+  rotation?: [number, number, number];
+  selected?: boolean;
+  onSelect?: () => void;
+}) {
+  try {
+    const geometry = (useLoader as any)(STLLoader as any, url) as THREE.BufferGeometry;
+    
+    useEffect(() => {
+      if (geometry) {
+        try {
+          geometry.computeVertexNormals();
+          geometry.center();
+        } catch (e) {
+          console.error('Error processing STL geometry:', e);
+        }
+      }
+    }, [geometry]);
+
+    if (!geometry) {
+      console.error(`Failed to load STL geometry from ${url}`);
+      return null;
+    }
+
+    return (
+      <mesh 
+        position={position} 
+        rotation={rotation} 
+        onClick={onSelect}
+        geometry={geometry}
+        onPointerOver={(e: any) => {
+          e.stopPropagation();
+          document.body.style.cursor = 'pointer';
+        }}
+        onPointerOut={() => {
+          document.body.style.cursor = 'default';
+        }}
+      >
+        <meshStandardMaterial 
+          color={selected ? '#00b4d8' : '#888888'} 
+          metalness={0.6} 
+          roughness={0.4}
+          side={THREE.DoubleSide}
+        />
+      </mesh>
+    );
+  } catch (error) {
+    console.error(`Failed to load STL from ${url}:`, error);
+    return null;
+  }
+}
+
+function STLModel(props: { 
+  url: string; 
+  position: [number, number, number]; 
+  rotation?: [number, number, number];
+  selected?: boolean;
+  onSelect?: () => void;
+}) {
+  return (
+    <Suspense fallback={null}>
+      <STLModelContent {...props} />
+    </Suspense>
+  );
+}
+
+// OBJ loader group with Suspense
+function OBJModelContent({ url, position, rotation, selected, onSelect }: { 
+  url: string; 
+  position: [number, number, number]; 
+  rotation?: [number, number, number];
+  selected?: boolean;
+  onSelect?: () => void;
+}) {
+  const obj = (useLoader as any)(OBJLoader as any, url) as THREE.Group;
+  
+  return (
+    <group position={position} rotation={rotation}>
+      <primitive 
+        object={obj} 
+        onClick={onSelect}
+        onPointerOver={(e: any) => {
+          e.stopPropagation();
+          document.body.style.cursor = 'pointer';
+        }}
+        onPointerOut={() => {
+          document.body.style.cursor = 'default';
+        }}
+      />
+    </group>
+  );
+}
+
+function OBJModel(props: { 
+  url: string; 
+  position: [number, number, number]; 
+  rotation?: [number, number, number];
+  selected?: boolean;
+  onSelect?: () => void;
+}) {
+  return (
+    <Suspense fallback={null}>
+      <OBJModelContent {...props} />
+    </Suspense>
+  );
+}
+
+export const Scene = ({ 
+  onSelectComponent, 
+  viewMode = 'focused',
+  components = [],
+  onAddComponent,
+  onUpdateComponent,
+  activeTool = 'select'
+}: SceneProps) => {
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  
+  // Debug: Log when components change
+  useEffect(() => {
+    console.log(`🎬 Scene: Components updated. Count: ${components.length}`);
+    components.forEach(comp => {
+      console.log(`  📦 ${comp.name} (${comp.id}): GLB=${comp.glb_url ? 'YES' : 'NO'}, Position=[${comp.position.join(', ')}]`);
+    });
+  }, [components]);
+  
+  const [dragOver, setDragOver] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [snap, setSnap] = useState({ translate: 0.5, rotate: Math.PI / 12, scale: 0.1 });
+  
+  // Map activeTool to transform mode
+  const transformMode: 'translate' | 'rotate' | 'scale' = 
+    activeTool === 'move' ? 'translate' :
+    activeTool === 'rotate' ? 'rotate' :
+    activeTool === 'scale' ? 'scale' : 'translate';
+  
+  // Log when transform mode changes for debugging
+  useEffect(() => {
+    console.log(`🔧 Transform mode changed to: ${transformMode} (activeTool: ${activeTool})`);
+  }, [transformMode, activeTool]);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOver(true);
+    e.dataTransfer.dropEffect = 'copy';
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOver(false);
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOver(false);
+
+    try {
+      const data = e.dataTransfer.getData('application/json');
+      if (!data) {
+        console.warn('⚠️ No drag data found');
+        return;
+      }
+
+      const component = JSON.parse(data);
+      console.log('🎯 Component dropped:', component);
+      
+      // Calculate drop position (screen-to-world approximate mapping to ground plane)
+      if (containerRef.current && onAddComponent) {
+        const rect = containerRef.current.getBoundingClientRect();
+        const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+        const ndcY = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
+        const x = ndcX * 10;
+        const z = -ndcY * 10;
+        const y = 0;
+
+        const componentToAdd = {
+          componentId: component.id || component.componentId,
+          name: component.name,
+          category: component.category,
+          glb_url: component.glb_url || null,
+          original_url: component.original_url || null,
+          bounding_box: component.bounding_box,
+          center: component.center,
+          position: [x, y, z] as [number, number, number],
+          rotation: [0, 0, 0] as [number, number, number],
+        };
+        
+        console.log('🎯 Calling onAddComponent with:', componentToAdd);
+        onAddComponent(componentToAdd);
+      } else {
+        console.error('❌ Missing containerRef or onAddComponent');
+      }
+    } catch (err) {
+      console.error('❌ Error handling drop:', err);
+    }
+  }, [onAddComponent]);
+
+  const handleSelect = (id: string) => {
+    setSelectedId(id);
+    onSelectComponent(id);
+  };
+
+  const cameraPosition: [number, number, number] = viewMode === 'shopfloor' 
+    ? [40, 30, 40] 
+    : [15, 12, 15];
+
+  return (
+    <div 
+      ref={containerRef}
+      className={`w-full h-full bg-background rounded-lg overflow-hidden border border-border transition-colors ${dragOver ? 'border-primary bg-primary/5' : ''}`}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      <Canvas shadows>
+        <PerspectiveCamera makeDefault position={cameraPosition} fov={50} />
+        <OrbitControls 
+          enablePan={true}
+          enableZoom={true}
+          enableRotate={true}
+          minDistance={5}
+          maxDistance={50}
+        />
+
+        {/* Lighting */}
+        <ambientLight intensity={0.4} />
+        <directionalLight 
+          position={[10, 15, 10]} 
+          intensity={1}
+          castShadow
+          shadow-mapSize-width={2048}
+          shadow-mapSize-height={2048}
+        />
+        <pointLight position={[-10, 10, -10]} intensity={0.5} color="#00b4d8" />
+        <pointLight position={[10, 5, 10]} intensity={0.3} color="#ff6b35" />
+
+        {/* Environment */}
+        <Environment preset="warehouse" />
+
+        {/* Grid floor */}
+        <Grid 
+          args={viewMode === 'shopfloor' ? [100, 100] : [50, 50]}
+          cellSize={1}
+          cellThickness={0.5}
+          cellColor="#2a2a2a"
+          sectionSize={5}
+          sectionThickness={1}
+          sectionColor="#00b4d8"
+          fadeDistance={viewMode === 'shopfloor' ? 80 : 40}
+          fadeStrength={1}
+          followCamera={false}
+          infiniteGrid
+        />
+
+        {/* Floor plane for shadows */}
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.01, 0]} receiveShadow>
+          <planeGeometry args={[100, 100]} />
+          <shadowMaterial transparent opacity={0.3} />
+        </mesh>
+
+        {/* Render dynamic components from backend */}
+        {components.length > 0 && (
+          <>
+            {console.log(`🎬 Starting to render ${components.length} components`)}
+            {components.map((comp) => {
+              const key = comp.id;
+              const originalUrl = comp.original_url;
+              const glbUrl = comp.glb_url;
+
+              // Determine which model to render - prioritize GLB, fallback to original format
+              const shouldUseGLB = glbUrl && glbUrl.trim() !== '' && glbUrl !== 'null';
+              const fileExt = originalUrl ? originalUrl.toLowerCase().split('.').pop() : '';
+              const isSTL = fileExt === 'stl';
+              const isOBJ = fileExt === 'obj';
+              const isSTEP = fileExt === 'step' || fileExt === 'stp';
+
+              console.log(`🎨 Rendering component ${comp.name} (${comp.id}): GLB=${glbUrl}, Original=${originalUrl}, Ext=${fileExt}, Position=${comp.position}`);
+
+          let content;
+          if (shouldUseGLB) {
+            console.log(`✅ Using GLB for ${comp.name}: ${glbUrl}`);
+            // GLBModel will be positioned by the wrapping group, so pass [0,0,0]
+            content = (
+              <GLBModel
+                url={glbUrl!}
+                position={[0, 0, 0]}
+                rotation={[0, 0, 0]}
+                selected={selectedId === comp.id}
+                onSelect={() => handleSelect(comp.id)}
+              />
+            );
+          } else if (originalUrl && isSTL) {
+            content = (
+              <STLModel
+                url={originalUrl}
+                position={comp.position}
+                rotation={comp.rotation || [0, 0, 0]}
+                selected={selectedId === comp.id}
+                onSelect={() => handleSelect(comp.id)}
+              />
+            );
+          } else if (originalUrl && isOBJ) {
+            content = (
+              <OBJModel
+                url={originalUrl}
+                position={comp.position}
+                rotation={comp.rotation || [0, 0, 0]}
+                selected={selectedId === comp.id}
+                onSelect={() => handleSelect(comp.id)}
+              />
+            );
+          } else if (originalUrl && isSTEP) {
+            // STEP files need conversion - if no GLB, show placeholder with helpful message
+            console.warn(`STEP file not converted to GLB yet: ${originalUrl}. GLB URL: ${glbUrl}. Please wait for processing or check backend logs.`);
+            content = (
+              <ComponentPlaceholder
+                position={comp.position}
+                bounding_box={comp.bounding_box}
+                category={comp.category}
+                selected={selectedId === comp.id}
+                onSelect={() => handleSelect(comp.id)}
+              />
+            );
+          } else {
+            // Fallback placeholder - show info about what's missing
+            console.warn(`Component ${comp.name} (${comp.id}): No GLB (${glbUrl}), original: ${originalUrl}, ext: ${fileExt}`);
+            content = (
+              <ComponentPlaceholder
+                position={comp.position}
+                bounding_box={comp.bounding_box}
+                category={comp.category}
+                selected={selectedId === comp.id}
+                onSelect={() => handleSelect(comp.id)}
+              />
+            );
+          }
+
+          // Wrap in group with position/rotation for TransformControls
+          // If no content, show placeholder
+          if (!content) {
+            console.warn(`No content to render for component ${comp.name} (${comp.id}), showing placeholder`);
+            content = (
+              <ComponentPlaceholder
+                position={[0, 0, 0]}
+                bounding_box={comp.bounding_box}
+                category={comp.category}
+                selected={selectedId === comp.id}
+                onSelect={() => handleSelect(comp.id)}
+              />
+            );
+          }
+          
+          const componentGroup = (
+            <group key={key} position={comp.position} rotation={comp.rotation || [0, 0, 0]}>
+              {content}
+            </group>
+          );
+
+          // Add TransformControls if selected and tool is not 'select' - wrap the group directly
+          if (selectedId === comp.id && onUpdateComponent && activeTool !== 'select') {
+            return (
+              <TransformControls
+                key={key}
+                mode={transformMode}
+                translationSnap={snap.translate}
+                rotationSnap={snap.rotate}
+                scaleSnap={snap.scale}
+                onObjectChange={(e) => {
+                  const obj = (e as any).target?.object;
+                  if (!obj) return;
+                  const pos = [obj.position.x, obj.position.y, obj.position.z] as [number, number, number];
+                  const rot = [obj.rotation.x, obj.rotation.y, obj.rotation.z] as [number, number, number];
+                  onUpdateComponent(comp.id, { position: pos, rotation: rot });
+                }}
+              >
+                {componentGroup}
+              </TransformControls>
+            );
+          }
+
+          // Return the component group directly (it already has position/rotation)
+          return componentGroup;
+            })}
+          </>
+        )}
+
+        {/* Shop floor elements - only visible in shopfloor mode */}
+        {viewMode === 'shopfloor' && (
+          <>
+            {/* Factory floor marking */}
+            <mesh position={[0, 0.01, -15]} rotation={[-Math.PI / 2, 0, 0]}>
+              <planeGeometry args={[80, 20]} />
+              <meshStandardMaterial color="#1a1a1a" />
+            </mesh>
+
+            {/* Workstations */}
+            <group position={[-20, 0, -10]}>
+              <mesh position={[0, 1, 0]}>
+                <boxGeometry args={[4, 2, 3]} />
+                <meshStandardMaterial color="#2a2a2a" metalness={0.6} roughness={0.4} />
+              </mesh>
+              <mesh position={[0, 2.2, 0]}>
+                <boxGeometry args={[3.5, 0.2, 2.5]} />
+                <meshStandardMaterial color="#444444" metalness={0.5} roughness={0.5} />
+              </mesh>
+            </group>
+
+            <group position={[20, 0, -10]}>
+              <mesh position={[0, 1, 0]}>
+                <boxGeometry args={[4, 2, 3]} />
+                <meshStandardMaterial color="#2a2a2a" metalness={0.6} roughness={0.4} />
+              </mesh>
+              <mesh position={[0, 2.2, 0]}>
+                <boxGeometry args={[3.5, 0.2, 2.5]} />
+                <meshStandardMaterial color="#444444" metalness={0.5} roughness={0.5} />
+              </mesh>
+            </group>
+
+            {/* Storage racks */}
+            <group position={[-25, 0, 15]}>
+              {[0, 1, 2, 3].map((level) => (
+                <mesh key={level} position={[0, 1 + level * 1.5, 0]}>
+                  <boxGeometry args={[8, 0.2, 3]} />
+                  <meshStandardMaterial color="#333333" metalness={0.7} roughness={0.3} />
+                </mesh>
+              ))}
+              <mesh position={[-3.8, 3, 0]}>
+                <boxGeometry args={[0.3, 6, 3]} />
+                <meshStandardMaterial color="#222222" metalness={0.6} roughness={0.4} />
+              </mesh>
+              <mesh position={[3.8, 3, 0]}>
+                <boxGeometry args={[0.3, 6, 3]} />
+                <meshStandardMaterial color="#222222" metalness={0.6} roughness={0.4} />
+              </mesh>
+            </group>
+
+            {/* Assembly machine */}
+            <group position={[15, 0, 12]}>
+              <mesh position={[0, 1.5, 0]}>
+                <boxGeometry args={[5, 3, 4]} />
+                <meshStandardMaterial color="#1a1a1a" metalness={0.8} roughness={0.2} />
+              </mesh>
+              <mesh position={[0, 3.2, 0]}>
+                <cylinderGeometry args={[0.5, 0.5, 1, 16]} />
+                <meshStandardMaterial color="#00b4d8" metalness={0.9} roughness={0.1} />
+              </mesh>
+            </group>
+
+            {/* Pallet positions */}
+            {[-15, -5, 5, 15].map((x, i) => (
+              <mesh key={i} position={[x, 0.05, 8]} rotation={[-Math.PI / 2, 0, 0]}>
+                <planeGeometry args={[2, 2]} />
+                <meshStandardMaterial color="#ff6b35" opacity={0.3} transparent />
+              </mesh>
+            ))}
+
+            {/* Safety barriers */}
+            <group position={[0, 0, 18]}>
+              {[-10, -5, 0, 5, 10].map((x, i) => (
+                <mesh key={i} position={[x, 0.5, 0]}>
+                  <cylinderGeometry args={[0.1, 0.1, 1, 8]} />
+                  <meshStandardMaterial color="#ffff00" metalness={0.7} roughness={0.3} />
+                </mesh>
+              ))}
+            </group>
+
+            {/* Secondary conveyor line */}
+            <group position={[0, 0, -12]}>
+              <mesh position={[0, 0.2, 0]} rotation={[0, Math.PI / 2, 0]}>
+                <boxGeometry args={[15, 0.3, 1.5]} />
+                <meshStandardMaterial color="#333333" metalness={0.7} roughness={0.4} />
+              </mesh>
+            </group>
+          </>
+        )}
+      </Canvas>
+    </div>
+  );
+};
