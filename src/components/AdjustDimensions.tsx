@@ -23,6 +23,7 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
   
   const [length, setLength] = useState<number>(getInitialLength());
   const [width, setWidth] = useState<number>(getInitialWidth());
+  const [forceUpdate, setForceUpdate] = useState(0);
 
   // Track previous component ID to detect component changes
   const prevComponentIdRef = useRef<string>(selectedComponent.id);
@@ -77,13 +78,16 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
     // Update local state FIRST - this will trigger re-render with new values
     // We use functional updates to ensure we get the latest state
     setLength(prev => {
-      console.log('📊 setLength called:', { prev, clampedLength });
+      console.log('📊 setLength called:', { prev, clampedLength, willChange: prev !== clampedLength });
       return clampedLength;
     });
     setWidth(prev => {
-      console.log('📊 setWidth called:', { prev, clampedWidth });
+      console.log('📊 setWidth called:', { prev, clampedWidth, willChange: prev !== clampedWidth });
       return clampedWidth;
     });
+    
+    // Force update to ensure slider re-renders
+    setForceUpdate(prev => prev + 1);
 
     // Update refs immediately (after state update is queued)
     lengthRef.current = clampedLength;
@@ -193,10 +197,10 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
             </div>
           </div>
           <Slider
-            key={`length-${selectedComponent.id}`}
+            key={`length-${selectedComponent.id}-${forceUpdate}`}
             value={[Math.round(length)]}
             onValueChange={(values) => {
-              console.log('📏 Length slider changed to:', values[0]);
+              console.log('📏 Length slider changed to:', values[0], 'current state length:', length);
               handleLengthSliderChange(values);
             }}
             min={10}
@@ -226,7 +230,7 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
               >
                 <ArrowDown className="h-4 w-4" />
               </Button>
-              <span className="text-sm font-medium min-w-[3rem] text-center" key={`width-display-${width}`}>
+              <span className="text-sm font-medium min-w-[3rem] text-center">
                 {Math.round(width)}
               </span>
               <Button
@@ -247,10 +251,10 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
             </div>
           </div>
           <Slider
-            key={`width-${selectedComponent.id}`}
+            key={`width-${selectedComponent.id}-${forceUpdate}`}
             value={[Math.round(width)]}
             onValueChange={(values) => {
-              console.log('📏 Width slider changed to:', values[0]);
+              console.log('📏 Width slider changed to:', values[0], 'current state width:', width);
               handleWidthSliderChange(values);
             }}
             min={10}
