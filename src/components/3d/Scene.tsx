@@ -50,9 +50,24 @@ function GLBModelContent({ url, position, rotation, selected, onSelect }: {
   
   console.log(`GLBModelContent: Successfully loaded GLB from ${url}`);
   
+  // Clone and apply selection highlight
+  const clonedScene = scene.clone();
+  if (selected) {
+    clonedScene.traverse((child) => {
+      if ((child as THREE.Mesh).isMesh) {
+        const mesh = child as THREE.Mesh;
+        const material = mesh.material as THREE.MeshStandardMaterial;
+        if (material) {
+          material.emissive = new THREE.Color(0x00b4d8);
+          material.emissiveIntensity = 0.3;
+        }
+      }
+    });
+  }
+  
   return (
     <primitive
-      object={scene.clone()}
+      object={clonedScene}
       onClick={onSelect}
       onPointerOver={(e: any) => {
         e.stopPropagation();
@@ -124,7 +139,9 @@ function ComponentPlaceholder({
         metalness={0.6} 
         roughness={0.4}
         transparent
-        opacity={0.7}
+        opacity={selected ? 0.9 : 0.7}
+        emissive={selected ? new THREE.Color(0x00b4d8) : new THREE.Color(0x000000)}
+        emissiveIntensity={selected ? 0.3 : 0}
       />
     </mesh>
   );
@@ -237,6 +254,60 @@ function OBJModel(props: {
     <Suspense fallback={null}>
       <OBJModelContent {...props} />
     </Suspense>
+  );
+}
+
+// Wrapper component for TransformControls to properly handle refs
+function TransformControlWrapper({ 
+  component, 
+  transformMode, 
+  snap, 
+  onUpdate, 
+  children 
+}: { 
+  component: SceneComponent;
+  transformMode: 'translate' | 'rotate' | 'scale';
+  snap: { translate: number; rotate: number; scale: number };
+  onUpdate: (pos: [number, number, number], rot: [number, number, number]) => void;
+  children: React.ReactNode;
+}) {
+  const groupRef = useRef<THREE.Group>(null);
+  
+  // Update group position/rotation when component changes
+  useEffect(() => {
+    if (groupRef.current) {
+      groupRef.current.position.set(...component.position);
+      groupRef.current.rotation.set(...(component.rotation || [0, 0, 0]));
+    }
+  }, [component.position, component.rotation]);
+  
+  return (
+    <TransformControls
+      mode={transformMode}
+      space="world"
+      translationSnap={snap.translate}
+      rotationSnap={snap.rotate}
+      scaleSnap={snap.scale}
+      onObjectChange={(e) => {
+        const obj = (e as any).target?.object;
+        if (!obj || !groupRef.current) return;
+        
+        // Get position and rotation from the group being controlled
+        const pos = [obj.position.x, obj.position.y, obj.position.z] as [number, number, number];
+        const rot = [obj.rotation.x, obj.rotation.y, obj.rotation.z] as [number, number, number];
+        
+        console.log(`🔄 Transform changed for ${component.name}: pos=[${pos.map(x => x.toFixed(2)).join(', ')}], rot=[${rot.map(x => x.toFixed(2)).join(', ')}]`);
+        onUpdate(pos, rot);
+      }}
+    >
+      <group 
+        ref={groupRef}
+        position={component.position} 
+        rotation={component.rotation || [0, 0, 0]}
+      >
+        {children}
+      </group>
+    </TransformControls>
   );
 }
 
@@ -488,45 +559,18 @@ export const Scene = ({
           }
           
           // Add TransformControls if selected and tool is not 'select'
+          // Use a separate component to handle refs properly
           if (selectedId === comp.id && onUpdateComponent && activeTool !== 'select') {
             return (
-              <TransformControls
+              <TransformControlWrapper
                 key={key}
-                mode={transformMode}
-                translationSnap={snap.translate}
-                rotationSnap={snap.rotate}
-                scaleSnap={snap.scale}
-                onObjectChange={(e) => {
-                  const obj = (e as any).target?.object;
-                  if (!obj) return;
-                  
-                  // Get position and rotation from the object being controlled
-                  // TransformControls directly controls the object's transform
-                  const pos = [obj.position.x, obj.position.y, obj.position.z] as [number, number, number];
-                  const rot = [obj.rotation.x, obj.rotation.y, obj.rotation.z] as [number, number, number];
-                  
-                  console.log(`🔄 Transform changed for ${comp.name}: pos=[${pos.map(x => x.toFixed(2)).join(', ')}], rot=[${rot.map(x => x.toFixed(2)).join(', ')}]`);
-                  onUpdateComponent(comp.id, { position: pos, rotation: rot });
-                }}
-                onObjectChangeDecoupled={(e) => {
-                  // This fires when the user releases the control
-                  const obj = (e as any).target?.object;
-                  if (!obj || !onUpdateComponent) return;
-                  
-                  const pos = [obj.position.x, obj.position.y, obj.position.z] as [number, number, number];
-                  const rot = [obj.rotation.x, obj.rotation.y, obj.rotation.z] as [number, number, number];
-                  
-                  console.log(`✅ Transform finalized for ${comp.name}`);
-                  onUpdateComponent(comp.id, { position: pos, rotation: rot });
-                }}
+                component={comp}
+                transformMode={transformMode}
+                snap={snap}
+                onUpdate={(pos, rot) => onUpdateComponent(comp.id, { position: pos, rotation: rot })}
               >
-                <group 
-                  position={comp.position} 
-                  rotation={comp.rotation || [0, 0, 0]}
-                >
-                  {content}
-                </group>
-              </TransformControls>
+                {content}
+              </TransformControlWrapper>
             );
           }
 
