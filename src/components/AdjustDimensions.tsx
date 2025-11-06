@@ -65,18 +65,26 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
   }, [selectedComponent]);
 
   // Helper function to update dimensions and notify parent
-  // Use functional setState to avoid stale closures
   const updateDimensions = useCallback((newLength: number, newWidth: number) => {
     // Clamp values to valid range and round
     const clampedLength = roundAndClamp(newLength);
     const clampedWidth = roundAndClamp(newWidth);
 
-    console.log('🔧 Updating dimensions:', { clampedLength, clampedWidth, currentState: { length, width } });
+    console.log('🔧 Updating dimensions:', { 
+      clampedLength, 
+      clampedWidth, 
+      currentState: { length: lengthRef.current, width: widthRef.current },
+      newValues: { newLength, newWidth }
+    });
 
     // Set flag to prevent useEffect from resetting our values
     isUpdatingRef.current = true;
 
-    // Update local state immediately
+    // Update refs immediately (before state update)
+    lengthRef.current = clampedLength;
+    widthRef.current = clampedWidth;
+
+    // Update local state - this will trigger re-render with new values
     setLength(clampedLength);
     setWidth(clampedWidth);
 
@@ -97,34 +105,35 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
     // Reset flag after a short delay to allow parent updates to complete
     setTimeout(() => {
       isUpdatingRef.current = false;
-    }, 100);
-  }, [onUpdateComponent, length, width]);
+    }, 200);
+  }, [onUpdateComponent]);
 
-  // Increment/Decrement handlers
+  // Increment/Decrement handlers - use refs to get latest values
   const handleLengthIncrement = () => {
-    updateDimensions(length + 1, width);
+    updateDimensions(lengthRef.current + 1, widthRef.current);
   };
 
   const handleLengthDecrement = () => {
-    updateDimensions(length - 1, width);
+    updateDimensions(lengthRef.current - 1, widthRef.current);
   };
 
   const handleWidthIncrement = () => {
-    updateDimensions(length, width + 1);
+    updateDimensions(lengthRef.current, widthRef.current + 1);
   };
 
   const handleWidthDecrement = () => {
-    updateDimensions(length, width - 1);
+    updateDimensions(lengthRef.current, widthRef.current - 1);
   };
 
   // Slider handlers - using refs to avoid stale closure issues
   const lengthRef = useRef<number>(getInitialLength());
   const widthRef = useRef<number>(getInitialWidth());
   
-  // Initialize and keep refs in sync with state
+  // Keep refs in sync with state - this ensures refs always have latest values
   useEffect(() => {
     lengthRef.current = length;
     widthRef.current = width;
+    console.log('🔄 Refs updated:', { length, width });
   }, [length, width]);
 
   const handleLengthSliderChange = (values: number[]) => {
