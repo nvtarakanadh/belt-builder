@@ -39,15 +39,9 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
     componentRef.current = selectedComponent;
   }, [selectedComponent]);
 
-  // Sync state when selectedComponent changes
-  // Only update if component ID changed OR if we're not currently updating (to avoid reset loop)
+  // Sync state when selectedComponent ID changes (NOT dimensions, to avoid reset loop)
+  // This ensures we only sync when a different component is selected, not when dimensions update
   useEffect(() => {
-    // Skip if we're in the middle of updating (prevents reset loop)
-    if (isUpdatingRef.current) {
-      console.log('⏸️ Skipping useEffect sync - update in progress');
-      return;
-    }
-
     const isDifferentComponent = prevComponentIdRef.current !== selectedComponent.id;
     
     if (isDifferentComponent) {
@@ -60,23 +54,11 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
       lengthRef.current = newLength;
       widthRef.current = newWidth;
       prevComponentIdRef.current = selectedComponent.id;
-    } else {
-      // Same component - only sync if values are significantly different (external update)
-      const newLength = roundAndClamp(selectedComponent.dimensions.length || 100);
-      const newWidth = roundAndClamp(selectedComponent.dimensions.width || 100);
-      const currentLength = lengthRef.current;
-      const currentWidth = widthRef.current;
-      
-      // Only sync if the difference is significant (more than rounding error)
-      if (Math.abs(currentLength - newLength) > 1 || Math.abs(currentWidth - newWidth) > 1) {
-        console.log('🔄 Syncing from external update:', { newLength, newWidth, currentLength, currentWidth });
-        setLength(newLength);
-        setWidth(newWidth);
-        lengthRef.current = newLength;
-        widthRef.current = newWidth;
-      }
+      isUpdatingRef.current = false;
     }
-  }, [selectedComponent.id, selectedComponent.dimensions.length, selectedComponent.dimensions.width]);
+    // Don't sync dimensions from props when component ID is the same
+    // This prevents the reset loop when we update dimensions ourselves
+  }, [selectedComponent.id]); // Only depend on ID, not dimensions!
 
   // Helper function to update dimensions and notify parent
   const updateDimensions = useCallback((newLength: number, newWidth: number) => {
