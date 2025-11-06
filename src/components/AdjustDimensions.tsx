@@ -113,10 +113,16 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
             <Label className="text-sm font-medium">Length (mm)</Label>
             <div className="flex items-center gap-2">
               <Button
+                type="button"
                 variant="outline"
                 size="icon"
                 className="h-7 w-7 hover:bg-primary hover:text-primary-foreground transition-colors"
-                onClick={handleLengthDecrement}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  console.log('🔽 Length decrement clicked, current length:', length);
+                  handleLengthDecrement();
+                }}
                 disabled={length <= 10}
               >
                 <ArrowDown className="h-4 w-4" />
@@ -125,10 +131,16 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
                 {Math.round(length)}
               </span>
               <Button
+                type="button"
                 variant="outline"
                 size="icon"
                 className="h-7 w-7 hover:bg-primary hover:text-primary-foreground transition-colors"
-                onClick={handleLengthIncrement}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  console.log('🔼 Length increment clicked, current length:', length);
+                  handleLengthIncrement();
+                }}
                 disabled={length >= 500}
               >
                 <ArrowUp className="h-4 w-4" />
@@ -137,7 +149,10 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
           </div>
           <Slider
             value={[length]}
-            onValueChange={handleLengthSliderChange}
+            onValueChange={(values) => {
+              console.log('📏 Length slider changed to:', values[0]);
+              handleLengthSliderChange(values);
+            }}
             min={10}
             max={500}
             step={1}
@@ -151,10 +166,16 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
             <Label className="text-sm font-medium">Width (mm)</Label>
             <div className="flex items-center gap-2">
               <Button
+                type="button"
                 variant="outline"
                 size="icon"
                 className="h-7 w-7 hover:bg-primary hover:text-primary-foreground transition-colors"
-                onClick={handleWidthDecrement}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  console.log('🔽 Width decrement clicked, current width:', width);
+                  handleWidthDecrement();
+                }}
                 disabled={width <= 10}
               >
                 <ArrowDown className="h-4 w-4" />
@@ -163,10 +184,16 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
                 {Math.round(width)}
               </span>
               <Button
+                type="button"
                 variant="outline"
                 size="icon"
                 className="h-7 w-7 hover:bg-primary hover:text-primary-foreground transition-colors"
-                onClick={handleWidthIncrement}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  console.log('🔼 Width increment clicked, current width:', width);
+                  handleWidthIncrement();
+                }}
                 disabled={width >= 500}
               >
                 <ArrowUp className="h-4 w-4" />
@@ -175,7 +202,10 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
           </div>
           <Slider
             value={[width]}
-            onValueChange={handleWidthSliderChange}
+            onValueChange={(values) => {
+              console.log('📏 Width slider changed to:', values[0]);
+              handleWidthSliderChange(values);
+            }}
             min={10}
             max={500}
             step={1}
