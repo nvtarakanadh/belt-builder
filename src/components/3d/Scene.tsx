@@ -1,6 +1,5 @@
 import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls, Grid, Environment, PerspectiveCamera, useGLTF, TransformControls } from '@react-three/drei';
-import { TransformControlsHelper } from './TransformControlsHelper';
 import { useLoader } from '@react-three/fiber';
 // type-only declarations are provided in src/types/three-extensions.d.ts
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader';
@@ -320,6 +319,7 @@ function TransformControlWrapper({
 }) {
   const groupRef = useRef<THREE.Group>(null);
   const controlsRef = useRef<any>(null);
+  const { gl, scene, camera } = useThree();
   
   // Update group position/rotation when component changes
   useEffect(() => {
@@ -329,9 +329,33 @@ function TransformControlWrapper({
     }
   }, [component.position, component.rotation]);
   
+  // Connect TransformControls to OrbitControls to disable orbit when dragging
+  useEffect(() => {
+    if (controlsRef.current) {
+      const controls = controlsRef.current;
+      const onChange = (event: any) => {
+        // Find OrbitControls in the scene
+        scene.children.forEach((child) => {
+          if (child.userData && child.userData.type === 'OrbitControls') {
+            const orbitControls = child.userData.controls;
+            if (orbitControls) {
+              orbitControls.enabled = !event.value;
+            }
+          }
+        });
+      };
+      
+      controls.addEventListener('dragging-changed', onChange);
+      return () => {
+        controls.removeEventListener('dragging-changed', onChange);
+      };
+    }
+  }, [scene]);
+  
   return (
     <TransformControls
       ref={controlsRef}
+      object={groupRef.current}
       mode={transformMode}
       space="world"
       translationSnap={snap.translate}
@@ -347,13 +371,6 @@ function TransformControlWrapper({
         
         console.log(`🔄 Transform changed for ${component.name}: pos=[${pos.map(x => x.toFixed(2)).join(', ')}], rot=[${rot.map(x => x.toFixed(2)).join(', ')}]`);
         onUpdate(pos, rot);
-      }}
-      onMouseDown={() => {
-        // Disable orbit controls when dragging transform controls
-        console.log('🖱️ TransformControls: dragging started');
-      }}
-      onMouseUp={() => {
-        console.log('🖱️ TransformControls: dragging ended');
       }}
     >
       <group 
@@ -496,9 +513,6 @@ export const Scene = ({
           minDistance={5}
           maxDistance={50}
         />
-        
-        {/* Helper to connect TransformControls with OrbitControls */}
-        <TransformControlsHelper />
 
         {/* Lighting */}
         <ambientLight intensity={0.4} />
