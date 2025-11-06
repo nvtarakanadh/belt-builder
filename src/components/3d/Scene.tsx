@@ -352,9 +352,9 @@ export const Scene = ({
       <Canvas shadows>
         <PerspectiveCamera makeDefault position={cameraPosition} fov={50} />
         <OrbitControls 
-          enablePan={true}
+          enablePan={activeTool === 'select'}
           enableZoom={true}
-          enableRotate={true}
+          enableRotate={activeTool === 'select'}
           minDistance={5}
           maxDistance={50}
         />
@@ -487,13 +487,7 @@ export const Scene = ({
             );
           }
           
-          const componentGroup = (
-            <group key={key} position={comp.position} rotation={comp.rotation || [0, 0, 0]}>
-              {content}
-            </group>
-          );
-
-          // Add TransformControls if selected and tool is not 'select' - wrap the group directly
+          // Add TransformControls if selected and tool is not 'select'
           if (selectedId === comp.id && onUpdateComponent && activeTool !== 'select') {
             return (
               <TransformControls
@@ -505,18 +499,43 @@ export const Scene = ({
                 onObjectChange={(e) => {
                   const obj = (e as any).target?.object;
                   if (!obj) return;
+                  
+                  // Get position and rotation from the object being controlled
+                  // TransformControls directly controls the object's transform
                   const pos = [obj.position.x, obj.position.y, obj.position.z] as [number, number, number];
                   const rot = [obj.rotation.x, obj.rotation.y, obj.rotation.z] as [number, number, number];
+                  
+                  console.log(`🔄 Transform changed for ${comp.name}: pos=[${pos.map(x => x.toFixed(2)).join(', ')}], rot=[${rot.map(x => x.toFixed(2)).join(', ')}]`);
+                  onUpdateComponent(comp.id, { position: pos, rotation: rot });
+                }}
+                onObjectChangeDecoupled={(e) => {
+                  // This fires when the user releases the control
+                  const obj = (e as any).target?.object;
+                  if (!obj || !onUpdateComponent) return;
+                  
+                  const pos = [obj.position.x, obj.position.y, obj.position.z] as [number, number, number];
+                  const rot = [obj.rotation.x, obj.rotation.y, obj.rotation.z] as [number, number, number];
+                  
+                  console.log(`✅ Transform finalized for ${comp.name}`);
                   onUpdateComponent(comp.id, { position: pos, rotation: rot });
                 }}
               >
-                {componentGroup}
+                <group 
+                  position={comp.position} 
+                  rotation={comp.rotation || [0, 0, 0]}
+                >
+                  {content}
+                </group>
               </TransformControls>
             );
           }
 
-          // Return the component group directly (it already has position/rotation)
-          return componentGroup;
+          // Return the component group directly (no transform controls)
+          return (
+            <group key={key} position={comp.position} rotation={comp.rotation || [0, 0, 0]}>
+              {content}
+            </group>
+          );
             })}
           </>
         )}
