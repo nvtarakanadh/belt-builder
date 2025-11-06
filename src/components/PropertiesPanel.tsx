@@ -54,6 +54,7 @@ export const PropertiesPanel = ({ selectedComponent, onUpdateComponent }: Proper
                 value={selectedComponent.partNumber || ''} 
                 placeholder="Enter part number"
                 className="bg-secondary"
+                readOnly
               />
             </div>
 
@@ -75,6 +76,7 @@ export const PropertiesPanel = ({ selectedComponent, onUpdateComponent }: Proper
                   type="number"
                   value={selectedComponent.dimensions.height} 
                   className="bg-secondary"
+                  readOnly
                 />
               </div>
             )}
@@ -86,6 +88,7 @@ export const PropertiesPanel = ({ selectedComponent, onUpdateComponent }: Proper
                   type="number"
                   value={selectedComponent.dimensions.diameter} 
                   className="bg-secondary"
+                  readOnly
                 />
               </div>
             )}

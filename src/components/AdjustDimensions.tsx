@@ -26,17 +26,35 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
 
   // Track previous component ID to detect component changes
   const prevComponentIdRef = useRef<string>(selectedComponent.id);
+  const isUpdatingRef = useRef<boolean>(false);
   
-  // Sync state when selectedComponent ID changes (not dimensions, to avoid reset loop)
-  // Only reset when the component itself changes, not when dimensions are updated
+  // Sync state when selectedComponent changes
+  // Only update if component ID changed OR if we're not currently updating (to avoid reset loop)
   useEffect(() => {
-    // Only update if this is a different component
-    if (prevComponentIdRef.current !== selectedComponent.id) {
+    const isDifferentComponent = prevComponentIdRef.current !== selectedComponent.id;
+    
+    if (isDifferentComponent) {
+      // Different component - always sync
       const newLength = roundAndClamp(selectedComponent.dimensions.length || 100);
       const newWidth = roundAndClamp(selectedComponent.dimensions.width || 100);
       setLength(newLength);
       setWidth(newWidth);
       prevComponentIdRef.current = selectedComponent.id;
+      isUpdatingRef.current = false;
+    } else if (!isUpdatingRef.current) {
+      // Same component, but we're not updating - sync from props
+      // This handles external updates (e.g., from backend)
+      const newLength = roundAndClamp(selectedComponent.dimensions.length || 100);
+      const newWidth = roundAndClamp(selectedComponent.dimensions.width || 100);
+      // Only update if values actually changed to avoid unnecessary renders
+      setLength(prev => {
+        const rounded = roundAndClamp(selectedComponent.dimensions.length || 100);
+        return Math.abs(prev - rounded) > 0.1 ? rounded : prev;
+      });
+      setWidth(prev => {
+        const rounded = roundAndClamp(selectedComponent.dimensions.width || 100);
+        return Math.abs(prev - rounded) > 0.1 ? rounded : prev;
+      });
     }
   }, [selectedComponent.id, selectedComponent.dimensions.length, selectedComponent.dimensions.width]);
 
@@ -53,9 +71,12 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
     const clampedLength = roundAndClamp(newLength);
     const clampedWidth = roundAndClamp(newWidth);
 
-    console.log('🔧 Updating dimensions:', { clampedLength, clampedWidth });
+    console.log('🔧 Updating dimensions:', { clampedLength, clampedWidth, currentState: { length, width } });
 
-    // Update local state immediately using functional updates
+    // Set flag to prevent useEffect from resetting our values
+    isUpdatingRef.current = true;
+
+    // Update local state immediately
     setLength(clampedLength);
     setWidth(clampedWidth);
 
@@ -72,7 +93,12 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
 
     console.log('🔧 Calling onUpdateComponent with:', updatedComponent);
     onUpdateComponent(updatedComponent);
-  }, [onUpdateComponent]);
+    
+    // Reset flag after a short delay to allow parent updates to complete
+    setTimeout(() => {
+      isUpdatingRef.current = false;
+    }, 100);
+  }, [onUpdateComponent, length, width]);
 
   // Increment/Decrement handlers
   const handleLengthIncrement = () => {
