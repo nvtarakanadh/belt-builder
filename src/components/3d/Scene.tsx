@@ -1,5 +1,6 @@
 import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls, Grid, Environment, PerspectiveCamera, useGLTF, TransformControls } from '@react-three/drei';
+import { TransformControlsHelper } from './TransformControlsHelper';
 import { useLoader } from '@react-three/fiber';
 // type-only declarations are provided in src/types/three-extensions.d.ts
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader';
@@ -495,6 +496,9 @@ export const Scene = ({
           minDistance={5}
           maxDistance={50}
         />
+        
+        {/* Helper to connect TransformControls with OrbitControls */}
+        <TransformControlsHelper />
 
         {/* Lighting */}
         <ambientLight intensity={0.4} />
