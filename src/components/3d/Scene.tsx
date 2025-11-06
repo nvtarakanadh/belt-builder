@@ -329,33 +329,12 @@ function TransformControlWrapper({
     }
   }, [component.position, component.rotation]);
   
-  // Connect TransformControls to OrbitControls to disable orbit when dragging
-  useEffect(() => {
-    if (controlsRef.current) {
-      const controls = controlsRef.current;
-      const onChange = (event: any) => {
-        // Find OrbitControls in the scene
-        scene.children.forEach((child) => {
-          if (child.userData && child.userData.type === 'OrbitControls') {
-            const orbitControls = child.userData.controls;
-            if (orbitControls) {
-              orbitControls.enabled = !event.value;
-            }
-          }
-        });
-      };
-      
-      controls.addEventListener('dragging-changed', onChange);
-      return () => {
-        controls.removeEventListener('dragging-changed', onChange);
-      };
-    }
-  }, [scene]);
+  // drei's TransformControls automatically coordinates with OrbitControls
+  // No need for manual coordination
   
   return (
     <TransformControls
       ref={controlsRef}
-      object={groupRef.current}
       mode={transformMode}
       space="world"
       translationSnap={snap.translate}
