@@ -193,7 +193,8 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
             </div>
           </div>
           <Slider
-            value={[length]}
+            key={`length-${selectedComponent.id}`}
+            value={[Math.round(length)]}
             onValueChange={(values) => {
               console.log('📏 Length slider changed to:', values[0]);
               handleLengthSliderChange(values);
@@ -225,7 +226,7 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
               >
                 <ArrowDown className="h-4 w-4" />
               </Button>
-              <span className="text-sm font-medium min-w-[3rem] text-center">
+              <span className="text-sm font-medium min-w-[3rem] text-center" key={`width-display-${width}`}>
                 {Math.round(width)}
               </span>
               <Button
@@ -246,7 +247,8 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
             </div>
           </div>
           <Slider
-            value={[width]}
+            key={`width-${selectedComponent.id}`}
+            value={[Math.round(width)]}
             onValueChange={(values) => {
               console.log('📏 Width slider changed to:', values[0]);
               handleWidthSliderChange(values);
