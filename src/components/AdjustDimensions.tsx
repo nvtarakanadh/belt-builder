@@ -142,6 +142,7 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
   // Track component ID to detect when component changes
   const [componentId, setComponentId] = useState<string>(selectedComponent.id);
   const isUpdatingRef = useRef(false); // Prevent reset during our own updates
+  const lastNotifiedDimensionsRef = useRef<{length?: number, width?: number, height?: number}>({});
 
   // Sync state when component ID changes (but NOT when dimensions change)
   useEffect(() => {
@@ -158,6 +159,7 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
       widthRef.current = newWidth;
       heightRef.current = newHeight;
       setComponentId(selectedComponent.id);
+      lastNotifiedDimensionsRef.current = {};
     }
     // DO NOT sync dimensions from props - we control our own state
     // This prevents the parent's dimension updates from resetting our local state
@@ -167,7 +169,24 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
   const selectedComponentRef = useRef(selectedComponent);
   useEffect(() => {
     selectedComponentRef.current = selectedComponent;
-  }, [selectedComponent]);
+    // If dimensions changed from parent (and it's the same component), sync refs but NOT state
+    // This ensures refs are always up-to-date without triggering a state reset
+    if (selectedComponent.id === componentId && !isUpdatingRef.current) {
+      // Only update refs if the dimensions are different and reasonable
+      if (selectedComponent.dimensions.length !== undefined && 
+          Math.abs(selectedComponent.dimensions.length - lengthRef.current) < 100) {
+        lengthRef.current = roundAndClampLength(selectedComponent.dimensions.length);
+      }
+      if (selectedComponent.dimensions.width !== undefined && 
+          Math.abs(selectedComponent.dimensions.width - widthRef.current) < 100) {
+        widthRef.current = roundAndClampWidth(selectedComponent.dimensions.width);
+      }
+      if (selectedComponent.dimensions.height !== undefined && 
+          Math.abs(selectedComponent.dimensions.height - heightRef.current) < 100) {
+        heightRef.current = roundAndClampHeight(selectedComponent.dimensions.height);
+      }
+    }
+  }, [selectedComponent, componentId]);
 
   // Update parent component with new dimensions - use refs to get current values
   const notifyParent = useCallback((newLength?: number, newWidth?: number, newHeight?: number) => {
@@ -176,12 +195,35 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
     const clampedWidth = newWidth !== undefined ? roundAndClampWidth(newWidth) : roundAndClampWidth(widthRef.current);
     const clampedHeight = newHeight !== undefined ? roundAndClampHeight(newHeight) : roundAndClampHeight(heightRef.current);
     
+    // Validate that the change is reasonable (prevent huge jumps)
+    const lastLength = lastNotifiedDimensionsRef.current.length ?? lengthRef.current;
+    const lastWidth = lastNotifiedDimensionsRef.current.width ?? widthRef.current;
+    const lastHeight = lastNotifiedDimensionsRef.current.height ?? heightRef.current;
+    
+    if (Math.abs(clampedLength - lastLength) > 100 || 
+        Math.abs(clampedWidth - lastWidth) > 100 || 
+        Math.abs(clampedHeight - lastHeight) > 100) {
+      console.error('⚠️ Suspicious dimension jump detected, rejecting:', {
+        length: { from: lastLength, to: clampedLength, diff: Math.abs(clampedLength - lastLength) },
+        width: { from: lastWidth, to: clampedWidth, diff: Math.abs(clampedWidth - lastWidth) },
+        height: { from: lastHeight, to: clampedHeight, diff: Math.abs(clampedHeight - lastHeight) }
+      });
+      return; // Reject suspicious jumps
+    }
+    
     // Use the latest selectedComponent from ref, not closure
     const currentComponent = selectedComponentRef.current;
     if (!currentComponent) {
       console.warn('⚠️ Cannot notify parent: selectedComponent is not available');
       return;
     }
+    
+    // Store what we're about to notify
+    lastNotifiedDimensionsRef.current = {
+      length: clampedLength,
+      width: clampedWidth,
+      height: clampedHeight
+    };
     
     const updatedComponent: ConveyorComponent = {
       ...currentComponent,

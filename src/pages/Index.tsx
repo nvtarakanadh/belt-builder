@@ -262,17 +262,21 @@ const Index = () => {
     // Find component in scene
     const comp = sceneComponents.find(c => c.id === id);
     if (comp) {
+      // If component is already selected and we're just updating, preserve existing dimensions
+      // to avoid recalculating from bounding box which might be wrong
+      const existingDimensions = selectedComponent?.id === comp.id ? selectedComponent.dimensions : undefined;
+      
       setSelectedComponent({
         id: comp.id,
         type: comp.category.toLowerCase() as any,
         name: comp.name,
         position: comp.position,
         rotation: comp.rotation || [0, 0, 0],
-        dimensions: comp.bounding_box ? {
-          width: (comp.bounding_box.max?.[0] || 0) - (comp.bounding_box.min?.[0] || 0),
-          height: (comp.bounding_box.max?.[1] || 0) - (comp.bounding_box.min?.[1] || 0),
-          length: (comp.bounding_box.max?.[2] || 0) - (comp.bounding_box.min?.[2] || 0),
-        } : { width: 1, height: 1, length: 1 },
+        dimensions: existingDimensions || (comp.bounding_box ? {
+          width: Math.abs((comp.bounding_box.max?.[0] || 0) - (comp.bounding_box.min?.[0] || 0)),
+          height: Math.abs((comp.bounding_box.max?.[1] || 0) - (comp.bounding_box.min?.[1] || 0)),
+          length: Math.abs((comp.bounding_box.max?.[2] || 0) - (comp.bounding_box.min?.[2] || 0)),
+        } : { width: 1, height: 1, length: 1 }),
         material: 'default',
         specifications: {},
         cost: 0,
