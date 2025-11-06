@@ -447,33 +447,11 @@ export const Scene = ({
     }
   }, [onAddComponent]);
 
-  const handleSelect = (id: string, e?: any) => {
-    if (e) {
-      e.stopPropagation();
-    }
+  const handleSelect = (id: string) => {
     console.log(`🎯 Selecting component: ${id}, previous: ${selectedId}`);
     setSelectedId(id);
     onSelectComponent(id);
   };
-  
-  // Handle clicking on empty space to deselect
-  const handleCanvasClick = useCallback((e: any) => {
-    // Only deselect if clicking directly on the canvas/background, not on a component
-    if (e.object === e.eventObject || e.object === e.intersections?.[0]?.object) {
-      // Check if we clicked on a component or empty space
-      const clickedComponent = components.find(comp => {
-        // This is a simple check - in practice, the click handler on components should stop propagation
-        return false;
-      });
-      
-      // If no component was clicked and we have a selection, deselect
-      if (selectedId && !clickedComponent) {
-        console.log('🎯 Deselecting - clicked on empty space');
-        setSelectedId(null);
-        onSelectComponent('');
-      }
-    }
-  }, [selectedId, components, onSelectComponent]);
 
   const cameraPosition: [number, number, number] = viewMode === 'shopfloor' 
     ? [40, 30, 40] 
@@ -489,10 +467,10 @@ export const Scene = ({
     >
       <Canvas 
         shadows
-        onClick={(e) => {
-          // Deselect if clicking on empty space (not on a component)
-          if (e.object === e.eventObject && selectedId) {
-            console.log('🎯 Clicked on canvas background, deselecting');
+        onPointerMissed={(e) => {
+          // This fires when clicking on empty space (not on any 3D object)
+          if (selectedId && activeTool === 'select') {
+            console.log('🎯 Clicked on empty space, deselecting');
             setSelectedId(null);
             onSelectComponent('');
           }
