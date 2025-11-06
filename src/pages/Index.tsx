@@ -903,7 +903,7 @@ const Index = () => {
                         });
                         
                         // Validate dimensions are reasonable (prevent huge jumps)
-                        if (newWidth > 1000 || newHeight > 2000 || newLength > 10000) {
+                        if (newWidth > 1000 || newHeight > 2000 || newLength > 5000) {
                           console.error('⚠️ Suspicious dimension values detected:', { newWidth, newHeight, newLength });
                           return; // Reject suspicious values
                         }

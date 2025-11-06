@@ -1,10 +1,10 @@
+import { useState, useCallback, useRef, Suspense, useEffect, useMemo } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls, Grid, Environment, PerspectiveCamera, useGLTF, TransformControls } from '@react-three/drei';
 import { useLoader } from '@react-three/fiber';
 // type-only declarations are provided in src/types/three-extensions.d.ts
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader';
-import { useState, useCallback, useRef, Suspense, useEffect, useMemo } from 'react';
 import * as THREE from 'three';
 
 type SceneComponent = {
@@ -19,6 +19,94 @@ type SceneComponent = {
   position: [number, number, number];
   rotation?: [number, number, number];
 };
+
+// Camera controller component to automatically fit camera to scene
+function CameraController({ components }: { components: SceneComponent[] }) {
+  const { camera, gl } = useThree();
+  const controlsRef = useRef<any>();
+  
+  const fitCameraToScene = useCallback(() => {
+    if (components.length === 0) return;
+    
+    // Calculate the combined bounding box of all components
+    const sceneBox = new THREE.Box3();
+    
+    components.forEach(comp => {
+      if (comp.bounding_box) {
+        const componentBox = new THREE.Box3(
+          new THREE.Vector3(comp.bounding_box.min[0], comp.bounding_box.min[1], comp.bounding_box.min[2]),
+          new THREE.Vector3(comp.bounding_box.max[0], comp.bounding_box.max[1], comp.bounding_box.max[2])
+        );
+        // Transform the box by component position
+        componentBox.translate(new THREE.Vector3(comp.position[0], comp.position[1], comp.position[2]));
+        sceneBox.union(componentBox);
+      } else {
+        // Fallback: create a small box at component position
+        const fallbackBox = new THREE.Box3(
+          new THREE.Vector3(comp.position[0] - 1, comp.position[1] - 1, comp.position[2] - 1),
+          new THREE.Vector3(comp.position[0] + 1, comp.position[1] + 1, comp.position[2] + 1)
+        );
+        sceneBox.union(fallbackBox);
+      }
+    });
+    
+    if (sceneBox.isEmpty()) return;
+    
+    const center = sceneBox.getCenter(new THREE.Vector3());
+    const size = sceneBox.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
+    
+    // Calculate camera distance to fit the scene
+    const fov = (camera as THREE.PerspectiveCamera).fov * (Math.PI / 180);
+    const cameraDistance = maxDim / (2 * Math.tan(fov / 2));
+    
+    // Position camera to look at the center of the scene from a good angle
+    const newPosition = new THREE.Vector3(
+      center.x + cameraDistance * 1.8,
+      center.y + cameraDistance * 1.2,
+      center.z + cameraDistance * 1.8
+    );
+    
+    console.log('CameraController: Fitting camera to scene:', {
+      center: center.toArray(),
+      size: size.toArray(),
+      maxDim,
+      cameraDistance,
+      newPosition: newPosition.toArray()
+    });
+    
+    // Set camera position and target
+    camera.position.copy(newPosition);
+    camera.lookAt(center);
+    camera.updateProjectionMatrix();
+    
+    // Update orbit controls target
+    if (controlsRef.current) {
+      controlsRef.current.target.copy(center);
+      controlsRef.current.update();
+    }
+    
+  }, [components, camera]);
+  
+  // Auto-fit camera when components change
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      fitCameraToScene();
+    }, 100); // Small delay to ensure models are loaded
+    
+    return () => clearTimeout(timeoutId);
+  }, [components, fitCameraToScene]);
+  
+  // Expose fit function globally for manual triggering
+  useEffect(() => {
+    (window as any).fitCameraToScene = fitCameraToScene;
+    return () => {
+      delete (window as any).fitCameraToScene;
+    };
+  }, [fitCameraToScene]);
+  
+  return null;
+}
 
 interface SceneProps {
   onSelectComponent: (id: string) => void;
@@ -39,7 +127,7 @@ function GLBModelContent({ url, position, rotation, selected, onSelect, targetSi
   onSelect?: () => void;
   targetSize?: [number, number, number];
 }) {
-  console.log(`GLBModelContent: Loading GLB from ${url}, selected=${selected}`);
+  console.log(`GLBModelContent: Loading GLB from ${url}, selected=${selected}, targetSize=${targetSize}`);
   
   // useGLTF throws a promise during loading (handled by Suspense)
   // Don't wrap in try-catch - let Suspense handle the promise
@@ -54,6 +142,20 @@ function GLBModelContent({ url, position, rotation, selected, onSelect, targetSi
   
   // Clone scene and set up reactive highlighting
   const clonedScene = useMemo(() => scene.clone(), [scene]);
+  
+  // Store original size to prevent cumulative scaling
+  const originalSizeRef = useRef<THREE.Vector3 | null>(null);
+  
+  // Initialize original size on first load
+  useEffect(() => {
+    if (!originalSizeRef.current) {
+      const box = new THREE.Box3().setFromObject(clonedScene);
+      const size = new THREE.Vector3();
+      box.getSize(size);
+      originalSizeRef.current = size.clone();
+      console.log(`GLBModelContent: Stored original size:`, size);
+    }
+  }, [clonedScene]);
   
   // Update highlighting based on selection state
   useEffect(() => {
@@ -77,28 +179,80 @@ function GLBModelContent({ url, position, rotation, selected, onSelect, targetSi
 
   // Scale to match desired bounding-box size if provided
   useEffect(() => {
-    if (!targetSize) return;
+    if (!originalSizeRef.current) return;
+    
     try {
-      const box = new THREE.Box3().setFromObject(clonedScene);
-      const size = new THREE.Vector3();
-      const center = new THREE.Vector3();
-      box.getSize(size);
-      box.getCenter(center);
-
-      const safeX = size.x || 1;
-      const safeY = size.y || 1;
-      const safeZ = size.z || 1;
-      const scaleX = targetSize[0] / safeX;
-      const scaleY = targetSize[1] / safeY;
-      const scaleZ = targetSize[2] / safeZ;
-
-      clonedScene.scale.set(scaleX, scaleY, scaleZ);
-
+      // Always scale relative to the original unscaled size, not the current size
+      const originalSize = originalSizeRef.current;
+      
+      if (targetSize) {
+        console.log(`GLBModelContent: Scaling to target size:`, targetSize);
+        console.log(`GLBModelContent: Original size:`, originalSizeRef.current);
+        
+        // Add validation for reasonable target sizes (in mm)
+        const [targetX, targetY, targetZ] = targetSize;
+        if (targetX > 10000 || targetY > 10000 || targetZ > 10000 || 
+            targetX <= 0 || targetY <= 0 || targetZ <= 0 ||
+            !isFinite(targetX) || !isFinite(targetY) || !isFinite(targetZ)) {
+          console.error('⚠️ Invalid target size detected:', targetSize);
+          return; // Don't scale to unreasonable sizes
+        }
+        
+        // Calculate scale factors for each dimension
+        // Ensure originalSize is valid
+        if (originalSize.x <= 0 || originalSize.y <= 0 || originalSize.z <= 0 ||
+            !isFinite(originalSize.x) || !isFinite(originalSize.y) || !isFinite(originalSize.z)) {
+          console.error('⚠️ Invalid original size:', originalSize);
+          return;
+        }
+        
+        const scaleX = targetX / originalSize.x;
+        const scaleY = targetY / originalSize.y;
+        const scaleZ = targetZ / originalSize.z;
+        
+        // Validate scale factors are reasonable (prevent huge scales)
+        if (!isFinite(scaleX) || !isFinite(scaleY) || !isFinite(scaleZ) ||
+            scaleX > 1000 || scaleY > 1000 || scaleZ > 1000 ||
+            scaleX < 0.001 || scaleY < 0.001 || scaleZ < 0.001) {
+          console.error('⚠️ Invalid scale factors calculated:', { scaleX, scaleY, scaleZ, targetSize, originalSize });
+          return;
+        }
+        
+        // Apply uniform scaling based on the largest dimension to maintain proportions
+        const maxScale = Math.max(scaleX, scaleY, scaleZ);
+        
+        console.log(`GLBModelContent: Applying scale:`, {
+          scale: [maxScale, maxScale, maxScale],
+          targetSize,
+          originalSize,
+          scaleFactors: { scaleX, scaleY, scaleZ }
+        });
+        clonedScene.scale.set(maxScale, maxScale, maxScale);
+      } else {
+        // No target size provided - apply reasonable default scaling
+        // This prevents models from being too large when no dimensions are specified
+        const maxDimension = Math.max(originalSize.x, originalSize.y, originalSize.z);
+        
+        // If the model is very large in its original units, scale it down
+        if (maxDimension > 1000) {
+          const defaultScale = 1000 / maxDimension; // Scale largest dimension to ~1000 units
+          console.log(`GLBModelContent: Applying default scale for large model:`, defaultScale);
+          clonedScene.scale.set(defaultScale, defaultScale, defaultScale);
+        } else if (maxDimension < 10) {
+          // If the model is very small, scale it up to be visible
+          const defaultScale = 100 / maxDimension; // Scale to ~100 units
+          console.log(`GLBModelContent: Applying default scale for small model:`, defaultScale);
+          clonedScene.scale.set(defaultScale, defaultScale, defaultScale);
+        }
+      }
+      
       // Recenter at origin after scaling
       const scaledBox = new THREE.Box3().setFromObject(clonedScene);
       const scaledCenter = new THREE.Vector3();
       scaledBox.getCenter(scaledCenter);
       clonedScene.position.sub(scaledCenter);
+      
+      console.log(`GLBModelContent: Scaling applied successfully`);
     } catch (e) {
       console.warn('Failed to scale GLB to target size', e);
     }
@@ -497,6 +651,8 @@ export const Scene = ({
   const cameraPosition: [number, number, number] = viewMode === 'shopfloor' 
     ? [40, 30, 40] 
     : [15, 12, 15];
+    
+  const controlsRef = useRef<any>();
 
   return (
     <div 
@@ -506,6 +662,18 @@ export const Scene = ({
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
+      {/* Camera fit button */}
+      <button
+        onClick={() => {
+          if ((window as any).fitCameraToScene) {
+            (window as any).fitCameraToScene();
+          }
+        }}
+        className="absolute top-4 right-4 z-10 bg-primary/80 hover:bg-primary text-primary-foreground px-3 py-2 rounded-md text-sm font-medium backdrop-blur-sm transition-colors"
+        title="Fit camera to all components"
+      >
+        Fit View
+      </button>
       <Canvas 
         shadows
         onPointerMissed={(e) => {
@@ -519,12 +687,16 @@ export const Scene = ({
       >
         <PerspectiveCamera makeDefault position={cameraPosition} fov={50} />
         <OrbitControls 
+          ref={controlsRef}
           enablePan={activeTool === 'select'}
           enableZoom={true}
           enableRotate={activeTool === 'select'}
           minDistance={5}
-          maxDistance={50}
+          maxDistance={200}  // Increased max distance for better overview
         />
+        
+        {/* Auto-fit camera to all components */}
+        <CameraController components={components} />
 
         {/* Lighting */}
         <ambientLight intensity={0.4} />
@@ -587,11 +759,33 @@ export const Scene = ({
             console.log(`✅ Using GLB for ${comp.name}: ${glbUrl}`);
             // GLBModel will be positioned by the wrapping group, so pass [0,0,0]
             // Compute desired size from bounding_box if available
-            const targetSize: [number, number, number] | undefined = comp.bounding_box ? [
-              (comp.bounding_box.max?.[0] || 1) - (comp.bounding_box.min?.[0] || 0),
-              (comp.bounding_box.max?.[1] || 1) - (comp.bounding_box.min?.[1] || 0),
-              (comp.bounding_box.max?.[2] || 1) - (comp.bounding_box.min?.[2] || 0),
-            ] : undefined;
+            // Convert from mm to scene units (1 scene unit = 1mm, so no conversion needed)
+            // But ensure we're using absolute values and reasonable sizes
+            const targetSize: [number, number, number] | undefined = comp.bounding_box ? (() => {
+              const width = Math.abs((comp.bounding_box.max?.[0] || 0) - (comp.bounding_box.min?.[0] || 0));
+              const height = Math.abs((comp.bounding_box.max?.[1] || 0) - (comp.bounding_box.min?.[1] || 0));
+              const length = Math.abs((comp.bounding_box.max?.[2] || 0) - (comp.bounding_box.min?.[2] || 0));
+              
+              // Validate dimensions are reasonable (in mm)
+              if (width > 10000 || height > 10000 || length > 10000) {
+                console.error('⚠️ Suspicious bounding box dimensions detected:', { width, height, length });
+                return undefined; // Don't scale to unreasonable sizes
+              }
+              
+              // Ensure minimum size of 1mm
+              return [
+                Math.max(width, 1),
+                Math.max(height, 1),
+                Math.max(length, 1)
+              ];
+            })() : undefined;
+            
+            console.log(`📏 Target size calculation for ${comp.name}:`, {
+              bounding_box: comp.bounding_box,
+              targetSize,
+              max: comp.bounding_box?.max,
+              min: comp.bounding_box?.min
+            });
 
             content = (
               <GLBModel
