@@ -192,7 +192,10 @@ function STLModelContent({ url, position, rotation, selected, onSelect }: {
       <mesh 
         position={position} 
         rotation={rotation} 
-        onClick={onSelect}
+        onClick={(e: any) => {
+          e.stopPropagation();
+          onSelect?.();
+        }}
         geometry={geometry}
         onPointerOver={(e: any) => {
           e.stopPropagation();
@@ -206,6 +209,8 @@ function STLModelContent({ url, position, rotation, selected, onSelect }: {
           color={selected ? '#00b4d8' : '#888888'} 
           metalness={0.6} 
           roughness={0.4}
+          emissive={selected ? new THREE.Color(0x00b4d8) : new THREE.Color(0x000000)}
+          emissiveIntensity={selected ? 0.3 : 0}
           side={THREE.DoubleSide}
         />
       </mesh>
