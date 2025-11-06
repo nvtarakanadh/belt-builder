@@ -196,19 +196,39 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
     const clampedHeight = newHeight !== undefined ? roundAndClampHeight(newHeight) : roundAndClampHeight(heightRef.current);
     
     // Validate that the change is reasonable (prevent huge jumps)
-    const lastLength = lastNotifiedDimensionsRef.current.length ?? lengthRef.current;
-    const lastWidth = lastNotifiedDimensionsRef.current.width ?? widthRef.current;
-    const lastHeight = lastNotifiedDimensionsRef.current.height ?? heightRef.current;
-    
-    if (Math.abs(clampedLength - lastLength) > 100 || 
-        Math.abs(clampedWidth - lastWidth) > 100 || 
-        Math.abs(clampedHeight - lastHeight) > 100) {
-      console.error('⚠️ Suspicious dimension jump detected, rejecting:', {
-        length: { from: lastLength, to: clampedLength, diff: Math.abs(clampedLength - lastLength) },
-        width: { from: lastWidth, to: clampedWidth, diff: Math.abs(clampedWidth - lastWidth) },
-        height: { from: lastHeight, to: clampedHeight, diff: Math.abs(clampedHeight - lastHeight) }
-      });
-      return; // Reject suspicious jumps
+    // Only check the dimension that's actually being changed
+    if (newLength !== undefined) {
+      const lastLength = lastNotifiedDimensionsRef.current.length ?? lengthRef.current;
+      if (Math.abs(clampedLength - lastLength) > 100) {
+        console.error('⚠️ Suspicious length jump detected, rejecting:', {
+          from: lastLength, 
+          to: clampedLength, 
+          diff: Math.abs(clampedLength - lastLength)
+        });
+        return; // Reject suspicious jumps
+      }
+    }
+    if (newWidth !== undefined) {
+      const lastWidth = lastNotifiedDimensionsRef.current.width ?? widthRef.current;
+      if (Math.abs(clampedWidth - lastWidth) > 100) {
+        console.error('⚠️ Suspicious width jump detected, rejecting:', {
+          from: lastWidth, 
+          to: clampedWidth, 
+          diff: Math.abs(clampedWidth - lastWidth)
+        });
+        return; // Reject suspicious jumps
+      }
+    }
+    if (newHeight !== undefined) {
+      const lastHeight = lastNotifiedDimensionsRef.current.height ?? heightRef.current;
+      if (Math.abs(clampedHeight - lastHeight) > 100) {
+        console.error('⚠️ Suspicious height jump detected, rejecting:', {
+          from: lastHeight, 
+          to: clampedHeight, 
+          diff: Math.abs(clampedHeight - lastHeight)
+        });
+        return; // Reject suspicious jumps
+      }
     }
     
     // Use the latest selectedComponent from ref, not closure
