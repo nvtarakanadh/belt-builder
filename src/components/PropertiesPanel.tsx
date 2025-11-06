@@ -1,21 +1,22 @@
 import { Card } from "@/components/ui/card";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
-import { Info } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Info, Trash2 } from "lucide-react";
 import { ConveyorComponent } from "@/types/conveyor";
 import { AdjustDimensions } from "@/components/AdjustDimensions";
 
 interface PropertiesPanelProps {
   selectedComponent: ConveyorComponent | null;
   onUpdateComponent: (component: ConveyorComponent) => void;
+  onDeleteComponent?: (id: string) => void;
 }
 
-export const PropertiesPanel = ({ selectedComponent, onUpdateComponent }: PropertiesPanelProps) => {
+export const PropertiesPanel = ({ selectedComponent, onUpdateComponent, onDeleteComponent }: PropertiesPanelProps) => {
   if (!selectedComponent) {
     return (
       <div className="panel-glass h-full flex items-center justify-center">
@@ -29,15 +30,32 @@ export const PropertiesPanel = ({ selectedComponent, onUpdateComponent }: Proper
 
   return (
     <div className="panel-glass h-full flex flex-col">
-      <div className="p-4 border-b border-border">
-        <div className="flex items-center justify-between">
+      <div className="p-4 border-b border-border flex-shrink-0">
+        <div className="flex items-center justify-between mb-2">
           <h2 className="font-semibold text-lg">Properties</h2>
           <Badge variant="outline">{selectedComponent.type}</Badge>
         </div>
-        <p className="text-sm text-muted-foreground mt-1">{selectedComponent.name}</p>
+        <div className="flex items-center justify-between">
+          <p className="text-sm text-muted-foreground">{selectedComponent.name}</p>
+          {onDeleteComponent && (
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => {
+                if (selectedComponent?.id && confirm(`Are you sure you want to delete "${selectedComponent.name}"?`)) {
+                  onDeleteComponent(selectedComponent.id);
+                }
+              }}
+              className="h-8"
+            >
+              <Trash2 className="h-4 w-4 mr-1" />
+              Delete
+            </Button>
+          )}
+        </div>
       </div>
       
-      <ScrollArea className="flex-1" style={{ height: '100%' }}>
+      <div className="flex-1 min-h-0 overflow-y-scroll custom-scrollbar">
         <div className="p-4">
           <Tabs defaultValue="specs">
           <TabsList className="grid w-full grid-cols-4">
@@ -61,25 +79,14 @@ export const PropertiesPanel = ({ selectedComponent, onUpdateComponent }: Proper
             <Separator />
 
             {/* Interactive Dimension Controls */}
-            {(selectedComponent.dimensions.length || selectedComponent.dimensions.width) && (
+            {(selectedComponent.dimensions.length || selectedComponent.dimensions.width || selectedComponent.dimensions.height) && (
               <AdjustDimensions
                 selectedComponent={selectedComponent}
                 onUpdateComponent={onUpdateComponent}
               />
             )}
 
-            {/* Legacy dimension inputs for height and diameter (if needed) */}
-            {selectedComponent.dimensions.height && (
-              <div className="space-y-2">
-                <Label>Height (mm)</Label>
-                <Input 
-                  type="number"
-                  value={selectedComponent.dimensions.height} 
-                  className="bg-secondary"
-                  readOnly
-                />
-              </div>
-            )}
+            {/* Legacy dimension inputs for diameter (if needed) */}
 
             {selectedComponent.dimensions.diameter && (
               <div className="space-y-2">
@@ -333,7 +340,7 @@ export const PropertiesPanel = ({ selectedComponent, onUpdateComponent }: Proper
           </TabsContent>
           </Tabs>
         </div>
-      </ScrollArea>
+      </div>
     </div>
   );
 };

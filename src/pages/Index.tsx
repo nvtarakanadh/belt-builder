@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Toolbar } from '@/components/Toolbar';
 import { ComponentLibrary } from '@/components/ComponentLibrary';
 import { PropertiesPanel } from '@/components/PropertiesPanel';
@@ -30,12 +30,60 @@ const Index = () => {
   const [viewMode, setViewMode] = useState<'focused' | 'shopfloor'>('focused');
   const [sceneComponents, setSceneComponents] = useState<SceneComponent[]>([]);
   const [currentProjectId, setCurrentProjectId] = useState<number | null>(null);
+  const hasLoadedRef = useRef(false); // Track if initial load has happened
+  const isLoadingRef = useRef(false); // Prevent concurrent loads
+  const isAddingComponentRef = useRef(false); // Prevent concurrent component additions
+  const addedComponentIdsRef = useRef<Set<string>>(new Set()); // Track added component IDs
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const lastSaveRef = useRef<number>(0);
+  
+  // History for undo/redo
+  const [history, setHistory] = useState<SceneComponent[][]>([[]]);
+  const [historyIndex, setHistoryIndex] = useState(0);
+  const isUndoRedoRef = useRef(false); // Prevent adding to history during undo/redo
 
   const API_BASE = (import.meta as any).env?.VITE_API_BASE || "http://localhost:8000";
 
-  // Load project assembly on mount
+  // Save to history whenever components change (except during undo/redo)
+  const prevComponentsRef = useRef<string>('');
+  const historyIndexRef = useRef(0);
+  historyIndexRef.current = historyIndex;
+  
   useEffect(() => {
+    if (isUndoRedoRef.current || !hasLoadedRef.current) {
+      return; // Skip during undo/redo or before initial load
+    }
+    
+    // Only save to history if components actually changed
+    const currentState = JSON.stringify(sceneComponents.map(c => ({ id: c.id, position: c.position, rotation: c.rotation })));
+    
+    if (currentState !== prevComponentsRef.current) {
+      console.log('📝 Saving to history. Current index:', historyIndexRef.current, 'Components:', sceneComponents.length);
+      prevComponentsRef.current = currentState;
+      // Remove any future history if we're not at the end
+      setHistory(prev => {
+        const newHistory = prev.slice(0, historyIndexRef.current + 1);
+        newHistory.push([...sceneComponents]);
+        const newIndex = newHistory.length - 1;
+        console.log('📝 History updated. New index:', newIndex, 'History length:', newHistory.length);
+        setHistoryIndex(newIndex);
+        return newHistory;
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sceneComponents]);
+
+  // Load project assembly on mount (only once)
+  useEffect(() => {
+    if (hasLoadedRef.current || isLoadingRef.current) {
+      console.log('⏭️ Skipping load - already loaded or loading');
+      return; // Already loaded or currently loading
+    }
+    
     const loadProject = async () => {
+      console.log('🔄 Starting project load...');
+      isLoadingRef.current = true;
       try {
         console.log('Loading project...');
         // Create or get default project
@@ -70,9 +118,59 @@ const Index = () => {
           
           const itemsData = await itemsRes.json();
           const items = Array.isArray(itemsData) ? itemsData : itemsData.results || [];
-          console.log('Assembly items loaded:', items.length);
+          console.log('Assembly items loaded from backend:', items.length);
           
-          const loadedComponents: SceneComponent[] = items.map((item: any) => ({
+          // Step 1: Deduplicate by backend ID (most important - backend IDs must be unique)
+          const uniqueItemsById = new Map<number, any>();
+          for (const item of items) {
+            const itemId = item.id;
+            if (!itemId) {
+              console.warn('⚠️ Item missing ID, skipping:', item);
+              continue;
+            }
+            
+            if (uniqueItemsById.has(itemId)) {
+              console.warn(`⚠️ Duplicate backend ID detected: ${itemId}, keeping first occurrence`);
+              continue;
+            }
+            
+            uniqueItemsById.set(itemId, item);
+          }
+          
+          console.log('Unique items by backend ID:', uniqueItemsById.size, 'out of', items.length);
+          
+          // Step 2: Additional deduplication by componentId + position (to catch same component at same position)
+          const uniqueItems: any[] = [];
+          const seenPositions = new Map<string, number>(); // componentId_position -> backend ID
+          
+          for (const [itemId, item] of uniqueItemsById.entries()) {
+            const componentId = item.component?.id || item.component_id;
+            if (!componentId) {
+              console.warn(`⚠️ Item ${itemId} missing component ID, skipping`);
+              continue;
+            }
+            
+            // Round positions to 0.1mm precision for comparison
+            const roundedX = Math.round((item.position_x || 0) * 10) / 10;
+            const roundedY = Math.round((item.position_y || 0) * 10) / 10;
+            const roundedZ = Math.round((item.position_z || 0) * 10) / 10;
+            const posKey = `${componentId}_${roundedX}_${roundedY}_${roundedZ}`;
+            
+            // Check if we've seen this component at this position before
+            if (seenPositions.has(posKey)) {
+              const existingId = seenPositions.get(posKey);
+              console.warn(`⚠️ Duplicate component at same position: componentId=${componentId}, position=[${roundedX}, ${roundedY}, ${roundedZ}]. Keeping ID ${existingId}, skipping ID ${itemId}`);
+              continue;
+            }
+            
+            seenPositions.set(posKey, itemId);
+            uniqueItems.push(item);
+          }
+          
+          console.log('Unique items after position deduplication:', uniqueItems.length);
+          
+          // Step 3: Map to SceneComponent format
+          const loadedComponents: SceneComponent[] = uniqueItems.map((item: any) => ({
             id: `comp-${item.id}`,
             componentId: item.component.id,
             name: item.custom_name || item.component.name,
@@ -81,12 +179,42 @@ const Index = () => {
             original_url: item.component.original_url || item.component.original_file_url,
             bounding_box: item.component.bounding_box,
             center: item.component.center,
-            position: [item.position_x, item.position_y, item.position_z],
-            rotation: [item.rotation_x, item.rotation_y, item.rotation_z] as [number, number, number],
+            position: [item.position_x || 0, item.position_y || 0, item.position_z || 0],
+            rotation: [item.rotation_x || 0, item.rotation_y || 0, item.rotation_z || 0] as [number, number, number],
           }));
           
-          console.log('Loaded components:', loadedComponents);
-          setSceneComponents(loadedComponents);
+          // Step 4: Final deduplication by frontend ID (shouldn't be needed, but safety check)
+          const finalUniqueComponents: SceneComponent[] = [];
+          const seenFrontendIds = new Set<string>();
+          
+          for (const comp of loadedComponents) {
+            if (seenFrontendIds.has(comp.id)) {
+              console.warn(`⚠️ Duplicate frontend ID in final check: ${comp.id} (${comp.name})`);
+              continue;
+            }
+            seenFrontendIds.add(comp.id);
+            finalUniqueComponents.push(comp);
+          }
+          
+          console.log('Final loaded components (after deduplication):', finalUniqueComponents.length);
+          console.log('Component IDs:', finalUniqueComponents.map(c => c.id));
+          console.log('Component names:', finalUniqueComponents.map(c => c.name));
+          
+          // Only set components if we haven't loaded yet
+          if (!hasLoadedRef.current) {
+            setSceneComponents(finalUniqueComponents);
+            // Initialize history with loaded components
+            setHistory([finalUniqueComponents]);
+            setHistoryIndex(0);
+            prevComponentsRef.current = JSON.stringify(finalUniqueComponents.map(c => ({ id: c.id, position: c.position, rotation: c.rotation })));
+            // Track all loaded component IDs
+            addedComponentIdsRef.current = new Set(finalUniqueComponents.map(c => c.id));
+            hasLoadedRef.current = true;
+            console.log('✅ Project loaded successfully');
+            console.log('✅ Tracked component IDs:', Array.from(addedComponentIdsRef.current));
+          } else {
+            console.warn('⚠️ Attempted to load components but already loaded - skipping');
+          }
         } else {
           // Create default project
           console.log('No projects found, creating default project...');
@@ -99,15 +227,19 @@ const Index = () => {
           
           if (!createRes.ok) {
             console.error('Failed to create project:', createRes.status);
+            isLoadingRef.current = false;
             return;
           }
           
           const newProject = await createRes.json();
           console.log('Created new project:', newProject.id);
           setCurrentProjectId(newProject.id);
+          hasLoadedRef.current = true;
         }
       } catch (error) {
         console.error('Failed to load project:', error);
+      } finally {
+        isLoadingRef.current = false;
       }
     };
     
@@ -152,53 +284,77 @@ const Index = () => {
   };
 
   const handleAddComponent = async (component: Omit<SceneComponent, 'id'>) => {
-    console.log('🚀 handleAddComponent called with:', component);
-    console.log('🚀 currentProjectId:', currentProjectId);
-    
-    if (!currentProjectId) {
-      console.error('❌ No project loaded, cannot add component');
-      // Try to load/create project first
-      console.log('Attempting to load or create project...');
-      try {
-        const projectsResponse = await fetch(`${API_BASE}/api/projects/`, {
-          credentials: 'include',
-        });
-        if (projectsResponse.ok) {
-          const projects = await projectsResponse.json();
-          const results = Array.isArray(projects) ? projects : projects.results || [];
-          if (results.length > 0) {
-            const project = results[0];
-            console.log('✅ Found existing project:', project.id);
-            setCurrentProjectId(project.id);
-            // Retry adding component after setting project
-            setTimeout(() => handleAddComponent(component), 100);
-            return;
-          } else {
-            // Create new project
-            const newProjectResponse = await fetch(`${API_BASE}/api/projects/`, {
-              method: 'POST',
-              credentials: 'include',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ name: 'New Project' }),
-            });
-            if (newProjectResponse.ok) {
-              const newProject = await newProjectResponse.json();
-              console.log('✅ Created new project:', newProject.id);
-              setCurrentProjectId(newProject.id);
-              // Retry adding component after creating project
-              setTimeout(() => handleAddComponent(component), 100);
-              return;
-            }
-          }
-        }
-      } catch (e) {
-        console.error('Failed to load/create project:', e);
-      }
+    // Prevent concurrent additions
+    if (isAddingComponentRef.current) {
+      console.warn('⚠️ handleAddComponent already in progress, skipping duplicate call');
       return;
     }
-
-    // Save to backend first, then add to state with response data
+    
+    console.log('🚀 handleAddComponent called with:', component);
+    console.log('🚀 currentProjectId:', currentProjectId);
+    console.log('🚀 Stack trace:', new Error().stack);
+    
+    isAddingComponentRef.current = true;
+    
     try {
+      if (!currentProjectId) {
+        console.error('❌ No project loaded, cannot add component');
+        // Try to load/create project first
+        console.log('Attempting to load or create project...');
+        try {
+          const projectsResponse = await fetch(`${API_BASE}/api/projects/`, {
+            credentials: 'include',
+          });
+          if (projectsResponse.ok) {
+            const projects = await projectsResponse.json();
+            const results = Array.isArray(projects) ? projects : projects.results || [];
+            if (results.length > 0) {
+              const project = results[0];
+              console.log('✅ Found existing project:', project.id);
+              setCurrentProjectId(project.id);
+              // Wait a bit for state to update, then retry
+              // Use a small delay to ensure state is set
+              // Clear the adding flag first
+              isAddingComponentRef.current = false;
+              setTimeout(() => {
+                if (!isLoadingRef.current && !isAddingComponentRef.current) {
+                  handleAddComponent(component);
+                }
+              }, 200);
+              return;
+            } else {
+              // Create new project
+              const newProjectResponse = await fetch(`${API_BASE}/api/projects/`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: 'New Project' }),
+              });
+              if (newProjectResponse.ok) {
+                const newProject = await newProjectResponse.json();
+                console.log('✅ Created new project:', newProject.id);
+                setCurrentProjectId(newProject.id);
+                // Wait a bit for state to update, then retry
+                // Clear the adding flag first
+                isAddingComponentRef.current = false;
+                setTimeout(() => {
+                  if (!isLoadingRef.current && !isAddingComponentRef.current) {
+                    handleAddComponent(component);
+                  }
+                }, 200);
+                return;
+              }
+            }
+          }
+        } catch (e) {
+          console.error('Failed to load/create project:', e);
+        } finally {
+          isAddingComponentRef.current = false;
+        }
+        return;
+      }
+
+      // Save to backend first, then add to state with response data
       console.log('📤 Sending request to backend...');
       const requestBody = {
           component_id: component.componentId,
@@ -269,146 +425,376 @@ const Index = () => {
       console.log('🎨 Current sceneComponents before add:', sceneComponents.length);
       
       // Use functional update to ensure we have the latest state
+      // Only add if component doesn't already exist
       setSceneComponents(prev => {
         console.log('🔄 setSceneComponents called. Previous count:', prev.length);
-        // Check if component already exists
-        const existingIndex = prev.findIndex(c => c.id === newComponent.id);
-        if (existingIndex >= 0) {
-          console.warn('⚠️ Component already exists, updating instead of adding:', newComponent.id);
-          const updated = [...prev];
-          updated[existingIndex] = newComponent;
-          console.log('✅ Updated existing component. Total count:', updated.length);
-          return updated;
+        console.log('🔄 Previous component IDs:', prev.map(c => c.id));
+        console.log('🔄 New component ID:', newComponent.id);
+        console.log('🔄 New component backend ID:', assemblyItem.id);
+        
+        // Check if we've already tracked this component ID
+        if (addedComponentIdsRef.current.has(newComponent.id)) {
+          console.warn('⚠️ Component ID already tracked, skipping duplicate:', newComponent.id);
+          return prev; // Don't add duplicate
         }
+        
+        // Check if component already exists by ID (most reliable check)
+        const existingById = prev.find(c => c.id === newComponent.id);
+        if (existingById) {
+          console.warn('⚠️ Component already exists by ID, skipping duplicate:', newComponent.id);
+          addedComponentIdsRef.current.add(newComponent.id); // Track it
+          return prev; // Don't add duplicate
+        }
+        
+        // Also check for duplicates by backend ID (without comp- prefix)
+        const backendId = String(assemblyItem.id);
+        const existingByBackendId = prev.find(c => {
+          const cBackendId = c.id.replace('comp-', '');
+          return cBackendId === backendId;
+        });
+        if (existingByBackendId) {
+          console.warn('⚠️ Component already exists by backend ID, skipping duplicate:', {
+            existing: existingByBackendId.id,
+            new: newComponent.id,
+            backendId: backendId
+          });
+          addedComponentIdsRef.current.add(newComponent.id); // Track it
+          return prev; // Don't add duplicate
+        }
+        
+        // Check for duplicates by componentId and very close position (within 1mm)
+        const duplicateByPosition = prev.find(c => 
+          c.componentId === newComponent.componentId &&
+          Math.abs(c.position[0] - newComponent.position[0]) < 1 &&
+          Math.abs(c.position[1] - newComponent.position[1]) < 1 &&
+          Math.abs(c.position[2] - newComponent.position[2]) < 1
+        );
+        if (duplicateByPosition) {
+          console.warn('⚠️ Component with same type and very close position already exists, skipping:', {
+            existing: duplicateByPosition.id,
+            new: newComponent.id,
+            position: newComponent.position
+          });
+          return prev; // Don't add duplicate
+        }
+        
         const updated = [...prev, newComponent];
         console.log('✅ Added new component. New count:', updated.length);
-        console.log('✅ All components:', updated.map(c => ({ id: c.id, name: c.name, position: c.position, glb_url: c.glb_url })));
+        console.log('✅ All component IDs after add:', updated.map(c => c.id));
         return updated;
       });
       
-      // Reload assembly items from backend to ensure consistency
-      // This ensures the component we just added is in sync with backend
-      try {
-        console.log('🔄 Reloading assembly items from backend...');
-        const itemsRes = await fetch(`${API_BASE}/api/assembly-items/?project_id=${currentProjectId}`, {
-          credentials: 'include',
-        });
-        
-        if (itemsRes.ok) {
-          const itemsData = await itemsRes.json();
-          const items = Array.isArray(itemsData) ? itemsData : itemsData.results || [];
-          console.log('✅ Reloaded assembly items:', items.length);
-          
-          const reloadedComponents: SceneComponent[] = items.map((item: any) => ({
-            id: `comp-${item.id}`,
-            componentId: item.component.id,
-            name: item.custom_name || item.component.name,
-            category: item.component.category_label || item.component.category || '',
-            glb_url: item.component.glb_url || item.component.glb_file_url || null,
-            original_url: item.component.original_url || item.component.original_file_url || null,
-            bounding_box: item.component.bounding_box,
-            center: item.component.center,
-            position: [item.position_x || 0, item.position_y || 0, item.position_z || 0],
-            rotation: [item.rotation_x || 0, item.rotation_y || 0, item.rotation_z || 0] as [number, number, number],
-          }));
-          
-          console.log('✅ Setting reloaded components:', reloadedComponents.length);
-          setSceneComponents(reloadedComponents);
-          
-          // Verify the component we just added is in the reloaded list
-          const found = reloadedComponents.find(c => c.id === newComponent.id);
-          if (found) {
-            console.log('✅ Component confirmed in reloaded list:', found.name);
-          } else {
-            console.warn('⚠️ Component not found in reloaded list, but it should be there');
-          }
-        } else {
-          console.warn('⚠️ Failed to reload assembly items, but component was added to local state');
-        }
-      } catch (reloadError) {
-        console.error('❌ Error reloading assembly items:', reloadError);
-        // Component was already added to local state, so continue
-      }
+      // Don't reload all components - we already added the new one to state
+      // This prevents duplicate components from being added
+      
+      // Track this component ID to prevent duplicates
+      addedComponentIdsRef.current.add(newComponent.id);
+      
+      // Small delay before allowing auto-save to prevent race conditions
+      setTimeout(() => {
+        isAddingComponentRef.current = false;
+      }, 500);
     } catch (error) {
       console.error('❌ Failed to save component to backend:', error);
+      // Reset flag on error too
+      setTimeout(() => {
+        isAddingComponentRef.current = false;
+      }, 500);
     }
   };
 
   const handleUpdateComponent = async (id: string, update: Partial<SceneComponent>) => {
     setSceneComponents(prev => prev.map(c => c.id === id ? { ...c, ...update } : c));
     
-    // Auto-save position/rotation changes to backend
-    if ((update.position || update.rotation) && currentProjectId) {
-      const component = sceneComponents.find(c => c.id === id);
-      if (component) {
-        const updated = { ...component, ...update };
-        try {
-          await fetch(`${API_BASE}/api/projects/${currentProjectId}/save/`, {
-            method: 'POST',
-            credentials: 'include',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              assembly_items: [{
-                id: id.replace('comp-', ''),
-                position_x: updated.position[0],
-                position_y: updated.position[1],
-                position_z: updated.position[2],
-                rotation_x: (updated.rotation || [0,0,0])[0],
-                rotation_y: (updated.rotation || [0,0,0])[1],
-                rotation_z: (updated.rotation || [0,0,0])[2],
-                rotation_w: 1,
-              }],
-            }),
-          });
-        } catch (error) {
-          console.error('Failed to auto-save component update:', error);
-        }
+    // Auto-save is now handled by the global auto-save system
+    // No need to save individual updates here - the useEffect will trigger auto-save
+  };
+
+  // Undo/Redo handlers
+  const handleUndo = useCallback(() => {
+    console.log('↩️ Undo called. Current historyIndex:', historyIndex, 'History length:', history.length);
+    if (historyIndex > 0) {
+      isUndoRedoRef.current = true;
+      const newIndex = historyIndex - 1;
+      console.log('↩️ Undoing to index:', newIndex, 'Components:', history[newIndex]?.length);
+      setHistoryIndex(newIndex);
+      setSceneComponents([...history[newIndex]]);
+      prevComponentsRef.current = JSON.stringify(history[newIndex].map(c => ({ id: c.id, position: c.position, rotation: c.rotation })));
+      // Clear selection if deleted component was selected
+      if (selectedComponent && !history[newIndex].find(c => c.id === selectedComponent.id)) {
+        setSelectedComponent(null);
       }
+      setTimeout(() => {
+        isUndoRedoRef.current = false;
+      }, 100);
+    } else {
+      console.warn('⚠️ Cannot undo: already at beginning of history');
+    }
+  }, [historyIndex, history, selectedComponent]);
+
+  const handleRedo = useCallback(() => {
+    console.log('↪️ Redo called. Current historyIndex:', historyIndex, 'History length:', history.length);
+    if (historyIndex < history.length - 1) {
+      isUndoRedoRef.current = true;
+      const newIndex = historyIndex + 1;
+      console.log('↪️ Redoing to index:', newIndex, 'Components:', history[newIndex]?.length);
+      setHistoryIndex(newIndex);
+      setSceneComponents([...history[newIndex]]);
+      prevComponentsRef.current = JSON.stringify(history[newIndex].map(c => ({ id: c.id, position: c.position, rotation: c.rotation })));
+      setTimeout(() => {
+        isUndoRedoRef.current = false;
+      }, 100);
+    } else {
+      console.warn('⚠️ Cannot redo: already at end of history');
+    }
+  }, [historyIndex, history]);
+
+  // Keyboard shortcuts for undo/redo
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        handleUndo();
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+        e.preventDefault();
+        handleRedo();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [historyIndex, history]);
+
+  const handleDeleteComponent = async (id: string) => {
+    if (!currentProjectId) {
+      console.error('No project loaded, cannot delete component');
+      return;
+    }
+
+    // Remove from local state immediately
+    setSceneComponents(prev => prev.filter(c => c.id !== id));
+    
+    // Clear selection if the deleted component was selected
+    if (selectedComponent?.id === id) {
+      setSelectedComponent(null);
+    }
+
+    // Delete from backend
+    try {
+      const componentId = id.replace('comp-', '');
+      const response = await fetch(`${API_BASE}/api/assembly-items/${componentId}/`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+
+      if (!response.ok) {
+        console.error('Failed to delete component from backend:', response.status);
+        // Optionally reload the scene to sync with backend
+        // For now, we'll just log the error since we already removed from local state
+      } else {
+        console.log('✅ Successfully deleted component from backend');
+      }
+    } catch (error) {
+      console.error('Error deleting component:', error);
     }
   };
 
-  const saveAssembly = async () => {
+  // Comprehensive save function that saves all component states
+  const saveAssembly = async (showStatus = true) => {
     if (!currentProjectId) {
-      console.error('No project to save to');
-      return;
+      console.error('❌ No project to save to');
+      if (showStatus) {
+        setSaveStatus('error');
+        setTimeout(() => setSaveStatus('idle'), 2000);
+      }
+      return false;
     }
     
-    const payload = {
-      assembly_items: sceneComponents.map((c, idx) => ({
-        id: undefined,
-        position_x: c.position[0],
-        position_y: c.position[1],
-        position_z: c.position[2],
-        rotation_x: (c.rotation || [0,0,0])[0],
-        rotation_y: (c.rotation || [0,0,0])[1],
-        rotation_z: (c.rotation || [0,0,0])[2],
-        rotation_w: 1,
-        scale_x: 1, scale_y: 1, scale_z: 1,
-        metadata: { componentId: c.componentId, name: c.name, category: c.category },
-        order: idx,
-      }))
-    };
+    if (showStatus) {
+      setSaveStatus('saving');
+    }
+    
     try {
-      await fetch(`${API_BASE}/api/projects/${currentProjectId}/save/`, {
+      // Deduplicate components before saving (by backend ID)
+      const uniqueComponents = new Map<number, SceneComponent>();
+      
+      for (const c of sceneComponents) {
+        const backendId = parseInt(c.id.replace('comp-', ''), 10);
+        if (isNaN(backendId)) {
+          console.warn('⚠️ Component has invalid ID format:', c.id);
+          continue;
+        }
+        
+        // If we already have this backend ID, skip it (keep first occurrence)
+        if (uniqueComponents.has(backendId)) {
+          console.warn(`⚠️ Duplicate backend ID detected: ${backendId} (${c.name}), skipping duplicate`);
+          continue;
+        }
+        
+        uniqueComponents.set(backendId, c);
+      }
+      
+      // Map all unique components with their backend IDs
+      const payload = {
+        assembly_items: Array.from(uniqueComponents.entries()).map(([backendId, c]) => {
+          // Calculate dimensions from bounding box if available
+          let scale_x = 1, scale_y = 1, scale_z = 1;
+          if (c.bounding_box) {
+            const width = Math.abs((c.bounding_box.max?.[0] || 0) - (c.bounding_box.min?.[0] || 0));
+            const height = Math.abs((c.bounding_box.max?.[1] || 0) - (c.bounding_box.min?.[1] || 0));
+            const length = Math.abs((c.bounding_box.max?.[2] || 0) - (c.bounding_box.min?.[2] || 0));
+            
+            scale_x = width || 1;
+            scale_y = height || 1;
+            scale_z = length || 1;
+          }
+          
+          return {
+            id: backendId,
+            position_x: c.position[0],
+            position_y: c.position[1],
+            position_z: c.position[2],
+            rotation_x: (c.rotation || [0, 0, 0])[0],
+            rotation_y: (c.rotation || [0, 0, 0])[1],
+            rotation_z: (c.rotation || [0, 0, 0])[2],
+            rotation_w: 1.0,
+            scale_x: scale_x,
+            scale_y: scale_y,
+            scale_z: scale_z,
+            metadata: {
+              componentId: c.componentId,
+              name: c.name,
+              category: c.category,
+              bounding_box: c.bounding_box,
+              center: c.center,
+            },
+          };
+        })
+      };
+      
+      console.log('💾 Saving assembly:', {
+        totalComponents: sceneComponents.length,
+        uniqueComponents: payload.assembly_items.length,
+        componentIds: payload.assembly_items.map(i => i.id)
+      });
+      
+      const response = await fetch(`${API_BASE}/api/projects/${currentProjectId}/save/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify(payload)
       });
-      console.log('Assembly saved');
+      
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+        console.error('❌ Save failed:', response.status, errorData);
+        if (showStatus) {
+          setSaveStatus('error');
+          setTimeout(() => setSaveStatus('idle'), 3000);
+        }
+        return false;
+      }
+      
+      const result = await response.json();
+      console.log('✅ Assembly saved successfully:', {
+        updated: result.updated || 0,
+        skipped: result.skipped || 0,
+        errors: result.errors || []
+      });
+      
+      // If there were skipped items, log them
+      if (result.skipped > 0) {
+        console.warn(`⚠️ ${result.skipped} items were skipped during save`);
+      }
+      
+      lastSaveRef.current = Date.now();
+      if (showStatus) {
+        setSaveStatus('saved');
+        setTimeout(() => setSaveStatus('idle'), 2000);
+      }
+      return true;
     } catch (e) {
-      console.error('Save failed', e);
+      console.error('❌ Save failed with exception:', e);
+      if (showStatus) {
+        setSaveStatus('error');
+        setTimeout(() => setSaveStatus('idle'), 3000);
+      }
+      return false;
     }
   };
+  
+  // Auto-save with debouncing
+  const triggerAutoSave = useCallback(() => {
+    // Clear existing timeout
+    if (autoSaveTimeoutRef.current) {
+      clearTimeout(autoSaveTimeoutRef.current);
+    }
+    
+    // Only auto-save if project is loaded and it's been at least 2 seconds since last save
+    if (!currentProjectId || !hasLoadedRef.current) {
+      return;
+    }
+    
+    const timeSinceLastSave = Date.now() - lastSaveRef.current;
+    if (timeSinceLastSave < 2000) {
+      // Too soon after last save, wait a bit more
+      autoSaveTimeoutRef.current = setTimeout(() => {
+        saveAssembly(false); // Silent auto-save
+      }, 3000);
+    } else {
+      // Save immediately
+      autoSaveTimeoutRef.current = setTimeout(() => {
+        saveAssembly(false); // Silent auto-save
+      }, 2000); // 2 second debounce
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentProjectId]);
+  
+  // Auto-save when components change (debounced)
+  useEffect(() => {
+    if (!hasLoadedRef.current || isUndoRedoRef.current || isAddingComponentRef.current) {
+      return; // Don't auto-save during initial load, undo/redo, or component addition
+    }
+    
+    triggerAutoSave();
+    
+    return () => {
+      if (autoSaveTimeoutRef.current) {
+        clearTimeout(autoSaveTimeoutRef.current);
+      }
+    };
+  }, [sceneComponents, triggerAutoSave]);
+  
+  // Periodic save every 30 seconds as backup
+  useEffect(() => {
+    if (!currentProjectId || !hasLoadedRef.current) {
+      return;
+    }
+    
+    const interval = setInterval(() => {
+      if (sceneComponents.length > 0) {
+        console.log('⏰ Periodic auto-save triggered');
+        saveAssembly(false);
+      }
+    }, 30000); // 30 seconds
+    
+    return () => clearInterval(interval);
+  }, [currentProjectId, sceneComponents.length]);
 
   return (
     <div className="h-screen flex flex-col bg-background overflow-hidden">
       {/* Top Toolbar */}
       <Toolbar 
-        onToolSelect={setActiveTool} 
+        onToolSelect={setActiveTool}
         activeTool={activeTool} 
         viewMode={viewMode}
         onViewModeChange={setViewMode}
+        onUndo={handleUndo}
+        onRedo={handleRedo}
+        canUndo={historyIndex > 0}
+        canRedo={historyIndex < history.length - 1}
+        onSave={() => saveAssembly(true)}
+        saveStatus={saveStatus}
       />
 
       {/* Main Content Area */}
@@ -440,9 +826,7 @@ const Index = () => {
             onUpdateComponent={handleUpdateComponent}
             activeTool={activeTool}
           />
-        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-2">
-          <Button size="sm" variant="secondary" onClick={saveAssembly}>Save Assembly</Button>
-        </div>
+        {/* Save button removed - now in Toolbar */}
         </div>
 
         {/* Right Sidebar - Properties & BOM */}
@@ -469,6 +853,7 @@ const Index = () => {
               <TabsContent value="properties" className="flex-1 mt-4 overflow-hidden min-h-0">
                 <PropertiesPanel 
                   selectedComponent={selectedComponent}
+                  onDeleteComponent={handleDeleteComponent}
                   onUpdateComponent={(component) => {
                     console.log('📦 PropertiesPanel onUpdateComponent called with:', component);
                     
@@ -480,35 +865,63 @@ const Index = () => {
                     // to reflect dimension changes in the 3D preview
                     if (component.dimensions && component.id) {
                       console.log('📦 Updating SceneComponent bounding_box for:', component.id);
+                      console.log('📦 Component dimensions:', component.dimensions);
                       const sceneComp = sceneComponents.find(c => c.id === component.id);
-                      if (sceneComp && sceneComp.bounding_box) {
-                        // Calculate center of current bounding box to preserve position
-                        const oldMin = sceneComp.bounding_box.min || [0, 0, 0];
-                        const oldMax = sceneComp.bounding_box.max || [0, 0, 0];
+                      if (sceneComp) {
+                        // Calculate center based on existing bounding box if present, else use current position
+                        const oldMin = sceneComp.bounding_box?.min || [sceneComp.position[0] - 0.5, sceneComp.position[1] - 0.5, sceneComp.position[2] - 0.5];
+                        const oldMax = sceneComp.bounding_box?.max || [sceneComp.position[0] + 0.5, sceneComp.position[1] + 0.5, sceneComp.position[2] + 0.5];
                         const oldCenter = [
                           (oldMin[0] + oldMax[0]) / 2,
                           (oldMin[1] + oldMax[1]) / 2,
                           (oldMin[2] + oldMax[2]) / 2,
                         ];
                         
-                        // Calculate new dimensions (preserve height if not changed)
-                        const newWidth = component.dimensions.width || (oldMax[0] - oldMin[0]);
-                        const newHeight = component.dimensions.height || (oldMax[1] - oldMin[1]);
-                        const newLength = component.dimensions.length || (oldMax[2] - oldMin[2]);
+                        // Calculate previous dimensions from bounding box
+                        // Mapping: width = X-axis, height = Y-axis, length = Z-axis
+                        const prevWidth = Math.abs(oldMax[0] - oldMin[0]) || 1;
+                        const prevHeight = Math.abs(oldMax[1] - oldMin[1]) || 1;
+                        const prevLength = Math.abs(oldMax[2] - oldMin[2]) || 1;
+                        
+                        // Use the provided dimension values, only fall back to previous if not provided
+                        // Convert to numbers and ensure they're valid
+                        const newWidth = (component.dimensions.width !== undefined && component.dimensions.width !== null && component.dimensions.width > 0)
+                          ? Number(component.dimensions.width)
+                          : prevWidth;
+                        const newHeight = (component.dimensions.height !== undefined && component.dimensions.height !== null && component.dimensions.height > 0)
+                          ? Number(component.dimensions.height)
+                          : prevHeight;
+                        const newLength = (component.dimensions.length !== undefined && component.dimensions.length !== null && component.dimensions.length > 0)
+                          ? Number(component.dimensions.length)
+                          : prevLength;
+                        
+                        console.log('📏 Dimension update:', { 
+                          prev: { prevWidth, prevHeight, prevLength },
+                          new: { newWidth, newHeight, newLength },
+                          provided: component.dimensions 
+                        });
                         
                         // Create new bounding box centered at the same position
+                        // Ensure dimensions are valid (at least 1mm)
+                        const validWidth = Math.max(newWidth, 1);
+                        const validHeight = Math.max(newHeight, 1);
+                        const validLength = Math.max(newLength, 1);
+                        
                         const newBoundingBox = {
                           min: [
-                            oldCenter[0] - newWidth / 2,
-                            oldCenter[1] - newHeight / 2,
-                            oldCenter[2] - newLength / 2,
+                            oldCenter[0] - validWidth / 2,
+                            oldCenter[1] - validHeight / 2,
+                            oldCenter[2] - validLength / 2,
                           ],
                           max: [
-                            oldCenter[0] + newWidth / 2,
-                            oldCenter[1] + newHeight / 2,
-                            oldCenter[2] + newLength / 2,
+                            oldCenter[0] + validWidth / 2,
+                            oldCenter[1] + validHeight / 2,
+                            oldCenter[2] + validLength / 2,
                           ],
                         };
+                        
+                        console.log('📦 New bounding box:', newBoundingBox);
+                        console.log('📦 Calculated length:', validLength, 'from Z-axis:', newBoundingBox.max[2] - newBoundingBox.min[2]);
                         
                         handleUpdateComponent(component.id, {
                           bounding_box: newBoundingBox,

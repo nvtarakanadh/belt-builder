@@ -30,12 +30,13 @@ interface SceneProps {
 }
 
 // Component to render GLB models
-function GLBModelContent({ url, position, rotation, selected, onSelect }: { 
+function GLBModelContent({ url, position, rotation, selected, onSelect, targetSize }: { 
   url: string; 
   position: [number, number, number]; 
   rotation?: [number, number, number];
   selected?: boolean;
   onSelect?: () => void;
+  targetSize?: [number, number, number];
 }) {
   console.log(`GLBModelContent: Loading GLB from ${url}, selected=${selected}`);
   
@@ -72,6 +73,35 @@ function GLBModelContent({ url, position, rotation, selected, onSelect }: {
       }
     });
   }, [selected, clonedScene]);
+
+  // Scale to match desired bounding-box size if provided
+  useEffect(() => {
+    if (!targetSize) return;
+    try {
+      const box = new THREE.Box3().setFromObject(clonedScene);
+      const size = new THREE.Vector3();
+      const center = new THREE.Vector3();
+      box.getSize(size);
+      box.getCenter(center);
+
+      const safeX = size.x || 1;
+      const safeY = size.y || 1;
+      const safeZ = size.z || 1;
+      const scaleX = targetSize[0] / safeX;
+      const scaleY = targetSize[1] / safeY;
+      const scaleZ = targetSize[2] / safeZ;
+
+      clonedScene.scale.set(scaleX, scaleY, scaleZ);
+
+      // Recenter at origin after scaling
+      const scaledBox = new THREE.Box3().setFromObject(clonedScene);
+      const scaledCenter = new THREE.Vector3();
+      scaledBox.getCenter(scaledCenter);
+      clonedScene.position.sub(scaledCenter);
+    } catch (e) {
+      console.warn('Failed to scale GLB to target size', e);
+    }
+  }, [clonedScene, targetSize?.[0], targetSize?.[1], targetSize?.[2]]);
   
   return (
     <primitive
@@ -98,6 +128,7 @@ function GLBModel(props: {
   rotation?: [number, number, number];
   selected?: boolean;
   onSelect?: () => void;
+  targetSize?: [number, number, number];
 }) {
   return (
     <Suspense 
@@ -551,6 +582,13 @@ export const Scene = ({
           if (shouldUseGLB) {
             console.log(`✅ Using GLB for ${comp.name}: ${glbUrl}`);
             // GLBModel will be positioned by the wrapping group, so pass [0,0,0]
+            // Compute desired size from bounding_box if available
+            const targetSize: [number, number, number] | undefined = comp.bounding_box ? [
+              (comp.bounding_box.max?.[0] || 1) - (comp.bounding_box.min?.[0] || 0),
+              (comp.bounding_box.max?.[1] || 1) - (comp.bounding_box.min?.[1] || 0),
+              (comp.bounding_box.max?.[2] || 1) - (comp.bounding_box.min?.[2] || 0),
+            ] : undefined;
+
             content = (
               <GLBModel
                 url={glbUrl!}
@@ -558,6 +596,7 @@ export const Scene = ({
                 rotation={[0, 0, 0]}
                 selected={selectedId === comp.id}
                 onSelect={() => handleSelect(comp.id)}
+                targetSize={targetSize}
               />
             );
           } else if (originalUrl && isSTL) {

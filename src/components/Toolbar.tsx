@@ -26,9 +26,15 @@ interface ToolbarProps {
   activeTool: string;
   viewMode: 'focused' | 'shopfloor';
   onViewModeChange: (mode: 'focused' | 'shopfloor') => void;
+  onUndo?: () => void;
+  onRedo?: () => void;
+  canUndo?: boolean;
+  canRedo?: boolean;
+  onSave?: () => void;
+  saveStatus?: 'idle' | 'saving' | 'saved' | 'error';
 }
 
-export const Toolbar = ({ onToolSelect, activeTool, viewMode, onViewModeChange }: ToolbarProps) => {
+export const Toolbar = ({ onToolSelect, activeTool, viewMode, onViewModeChange, onUndo, onRedo, canUndo = false, canRedo = false, onSave, saveStatus = 'idle' }: ToolbarProps) => {
   return (
     <TooltipProvider>
       <div className="panel-glass px-4 py-3 flex items-center gap-2">
@@ -87,7 +93,12 @@ export const Toolbar = ({ onToolSelect, activeTool, viewMode, onViewModeChange }
         <div className="flex gap-1">
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon">
+              <Button 
+                variant="ghost" 
+                size="icon"
+                onClick={onUndo}
+                disabled={!canUndo}
+              >
                 <Undo2 className="h-4 w-4" />
               </Button>
             </TooltipTrigger>
@@ -97,7 +108,12 @@ export const Toolbar = ({ onToolSelect, activeTool, viewMode, onViewModeChange }
           </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon">
+              <Button 
+                variant="ghost" 
+                size="icon"
+                onClick={onRedo}
+                disabled={!canRedo}
+              >
                 <Redo2 className="h-4 w-4" />
               </Button>
             </TooltipTrigger>
@@ -171,13 +187,19 @@ export const Toolbar = ({ onToolSelect, activeTool, viewMode, onViewModeChange }
           </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="default" size="sm" className="glow-primary">
+              <Button 
+                variant="default" 
+                size="sm" 
+                className="glow-primary"
+                onClick={onSave}
+                disabled={saveStatus === 'saving'}
+              >
                 <Save className="h-4 w-4 mr-2" />
-                Save Project
+                {saveStatus === 'saving' ? 'Saving...' : saveStatus === 'saved' ? 'Saved!' : saveStatus === 'error' ? 'Error' : 'Save Project'}
               </Button>
             </TooltipTrigger>
             <TooltipContent>
-              <p>Save Project</p>
+              <p>Save Project (Auto-saves every 30s)</p>
             </TooltipContent>
           </Tooltip>
         </div>

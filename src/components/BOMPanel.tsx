@@ -1,5 +1,4 @@
 import { Card } from "@/components/ui/card";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Download, FileSpreadsheet } from "lucide-react";
@@ -14,7 +13,7 @@ export const BOMPanel = ({ items }: BOMPanelProps) => {
 
   return (
     <div className="panel-glass h-full flex flex-col">
-      <div className="p-4 border-b border-border">
+      <div className="p-4 border-b border-border flex-shrink-0">
         <div className="flex items-center justify-between">
           <div>
             <h2 className="font-semibold text-lg">Bill of Materials</h2>
@@ -27,7 +26,7 @@ export const BOMPanel = ({ items }: BOMPanelProps) => {
         </div>
       </div>
       
-      <ScrollArea className="flex-1" style={{ height: '100%' }}>
+      <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
         <div className="p-4">
           <Table>
             <TableHeader>
@@ -72,7 +71,7 @@ export const BOMPanel = ({ items }: BOMPanelProps) => {
             </Card>
           )}
         </div>
-      </ScrollArea>
+      </div>
     </div>
   );
 };
