@@ -466,7 +466,7 @@ const Index = () => {
                 <TabsTrigger value="properties">Properties</TabsTrigger>
                 <TabsTrigger value="bom">BOM</TabsTrigger>
               </TabsList>
-              <TabsContent value="properties" className="flex-1 mt-4 overflow-hidden">
+              <TabsContent value="properties" className="flex-1 mt-4 overflow-hidden min-h-0">
                 <PropertiesPanel 
                   selectedComponent={selectedComponent}
                   onUpdateComponent={(component) => {
@@ -515,7 +515,7 @@ const Index = () => {
                   }}
                 />
               </TabsContent>
-              <TabsContent value="bom" className="flex-1 mt-4 overflow-hidden">
+              <TabsContent value="bom" className="flex-1 mt-4 overflow-hidden min-h-0">
                 <BOMPanel items={bomItems} />
               </TabsContent>
             </Tabs>

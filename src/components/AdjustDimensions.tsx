@@ -24,12 +24,20 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
   const [length, setLength] = useState<number>(getInitialLength());
   const [width, setWidth] = useState<number>(getInitialWidth());
 
-  // Sync state when selectedComponent changes
+  // Track previous component ID to detect component changes
+  const prevComponentIdRef = useRef<string>(selectedComponent.id);
+  
+  // Sync state when selectedComponent ID changes (not dimensions, to avoid reset loop)
+  // Only reset when the component itself changes, not when dimensions are updated
   useEffect(() => {
-    const newLength = roundAndClamp(selectedComponent.dimensions.length || 100);
-    const newWidth = roundAndClamp(selectedComponent.dimensions.width || 100);
-    setLength(newLength);
-    setWidth(newWidth);
+    // Only update if this is a different component
+    if (prevComponentIdRef.current !== selectedComponent.id) {
+      const newLength = roundAndClamp(selectedComponent.dimensions.length || 100);
+      const newWidth = roundAndClamp(selectedComponent.dimensions.width || 100);
+      setLength(newLength);
+      setWidth(newWidth);
+      prevComponentIdRef.current = selectedComponent.id;
+    }
   }, [selectedComponent.id, selectedComponent.dimensions.length, selectedComponent.dimensions.width]);
 
   // Use ref to track latest selectedComponent to avoid stale closures

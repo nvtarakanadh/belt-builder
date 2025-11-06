@@ -27,7 +27,7 @@ export const BOMPanel = ({ items }: BOMPanelProps) => {
         </div>
       </div>
       
-      <ScrollArea className="flex-1">
+      <ScrollArea className="flex-1 h-full">
         <div className="p-4">
           <Table>
             <TableHeader>
