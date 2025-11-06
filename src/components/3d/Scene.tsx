@@ -88,13 +88,24 @@ function CameraController({ components }: { components: SceneComponent[] }) {
     
   }, [components, camera]);
   
-  // Auto-fit camera when components change
+  // Track component IDs to detect when components are added/removed (not just updated)
+  const componentIdsRef = useRef<string>('');
+  
+  // Auto-fit camera only when components are added/removed, not when dimensions change
   useEffect(() => {
-    const timeoutId = setTimeout(() => {
-      fitCameraToScene();
-    }, 100); // Small delay to ensure models are loaded
+    // Create a string of component IDs to detect actual additions/removals
+    const currentIds = components.map(c => c.id).sort().join(',');
     
-    return () => clearTimeout(timeoutId);
+    // Only auto-fit if the component IDs have changed (additions/removals)
+    // Not if only bounding boxes or other properties changed
+    if (currentIds !== componentIdsRef.current) {
+      componentIdsRef.current = currentIds;
+      const timeoutId = setTimeout(() => {
+        fitCameraToScene();
+      }, 100); // Small delay to ensure models are loaded
+      
+      return () => clearTimeout(timeoutId);
+    }
   }, [components, fitCameraToScene]);
   
   // Expose fit function globally for manual triggering
