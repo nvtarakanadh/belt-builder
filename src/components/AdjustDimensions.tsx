@@ -82,20 +82,14 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
   };
 
   // Slider handlers - using refs to avoid stale closure issues
-  const lengthRef = useRef<number>(length);
-  const widthRef = useRef<number>(width);
+  const lengthRef = useRef<number>(getInitialLength());
+  const widthRef = useRef<number>(getInitialWidth());
   
   // Initialize and keep refs in sync with state
   useEffect(() => {
     lengthRef.current = length;
     widthRef.current = width;
   }, [length, width]);
-  
-  // Initialize refs on mount
-  useEffect(() => {
-    lengthRef.current = initialLength;
-    widthRef.current = initialWidth;
-  }, []);
 
   const handleLengthSliderChange = (values: number[]) => {
     const newLength = roundAndClamp(values[0]);
