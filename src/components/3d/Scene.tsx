@@ -274,6 +274,7 @@ function OBJModelContent({ url, position, rotation, selected, onSelect }: {
         object={obj} 
         onClick={(e: any) => {
           e.stopPropagation();
+          console.log('🎯 OBJ model clicked');
           onSelect?.();
         }}
         onPointerOver={(e: any) => {
@@ -317,6 +318,7 @@ function TransformControlWrapper({
   children: React.ReactNode;
 }) {
   const groupRef = useRef<THREE.Group>(null);
+  const controlsRef = useRef<any>(null);
   
   // Update group position/rotation when component changes
   useEffect(() => {
@@ -328,6 +330,7 @@ function TransformControlWrapper({
   
   return (
     <TransformControls
+      ref={controlsRef}
       mode={transformMode}
       space="world"
       translationSnap={snap.translate}
@@ -343,6 +346,13 @@ function TransformControlWrapper({
         
         console.log(`🔄 Transform changed for ${component.name}: pos=[${pos.map(x => x.toFixed(2)).join(', ')}], rot=[${rot.map(x => x.toFixed(2)).join(', ')}]`);
         onUpdate(pos, rot);
+      }}
+      onMouseDown={() => {
+        // Disable orbit controls when dragging transform controls
+        console.log('🖱️ TransformControls: dragging started');
+      }}
+      onMouseUp={() => {
+        console.log('🖱️ TransformControls: dragging ended');
       }}
     >
       <group 
