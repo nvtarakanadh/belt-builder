@@ -28,6 +28,17 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
   const prevComponentIdRef = useRef<string>(selectedComponent.id);
   const isUpdatingRef = useRef<boolean>(false);
   
+  // Slider handlers - using refs to avoid stale closure issues
+  // Initialize refs BEFORE useEffect that uses them
+  const lengthRef = useRef<number>(getInitialLength());
+  const widthRef = useRef<number>(getInitialWidth());
+  
+  // Use ref to track latest selectedComponent to avoid stale closures
+  const componentRef = useRef(selectedComponent);
+  useEffect(() => {
+    componentRef.current = selectedComponent;
+  }, [selectedComponent]);
+
   // Sync state when selectedComponent changes
   // Only update if component ID changed OR if we're not currently updating (to avoid reset loop)
   useEffect(() => {
@@ -66,12 +77,6 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
       }
     }
   }, [selectedComponent.id, selectedComponent.dimensions.length, selectedComponent.dimensions.width]);
-
-  // Use ref to track latest selectedComponent to avoid stale closures
-  const componentRef = useRef(selectedComponent);
-  useEffect(() => {
-    componentRef.current = selectedComponent;
-  }, [selectedComponent]);
 
   // Helper function to update dimensions and notify parent
   const updateDimensions = useCallback((newLength: number, newWidth: number) => {
@@ -134,10 +139,6 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
     updateDimensions(lengthRef.current, widthRef.current - 1);
   };
 
-  // Slider handlers - using refs to avoid stale closure issues
-  const lengthRef = useRef<number>(getInitialLength());
-  const widthRef = useRef<number>(getInitialWidth());
-  
   // Keep refs in sync with state - this ensures refs always have latest values
   useEffect(() => {
     lengthRef.current = length;
