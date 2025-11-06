@@ -217,15 +217,36 @@ function GLBModelContent({ url, position, rotation, selected, onSelect, targetSi
           return;
         }
         
-        const scaleX = targetX / originalSize.x;
-        const scaleY = targetY / originalSize.y;
-        const scaleZ = targetZ / originalSize.z;
+        // Detect if original model is likely in meters (very small values)
+        // If original size is < 1 unit and target is > 100, assume original is in meters
+        const maxOriginalDim = Math.max(originalSize.x, originalSize.y, originalSize.z);
+        const maxTargetDim = Math.max(targetX, targetY, targetZ);
+        const likelyInMeters = maxOriginalDim < 1 && maxTargetDim > 100;
+        
+        // If model is in meters, convert original size to mm (multiply by 1000)
+        const adjustedOriginalSize = likelyInMeters 
+          ? new THREE.Vector3(originalSize.x * 1000, originalSize.y * 1000, originalSize.z * 1000)
+          : originalSize;
+        
+        if (likelyInMeters) {
+          console.warn(`⚠️ GLBModelContent: Detected model in meters, converting to mm. Original: ${maxOriginalDim.toFixed(3)}m, Target: ${maxTargetDim}mm`);
+        }
+        
+        const scaleX = targetX / adjustedOriginalSize.x;
+        const scaleY = targetY / adjustedOriginalSize.y;
+        const scaleZ = targetZ / adjustedOriginalSize.z;
         
         // Validate scale factors are reasonable (prevent huge scales)
         if (!isFinite(scaleX) || !isFinite(scaleY) || !isFinite(scaleZ) ||
-            scaleX > 1000 || scaleY > 1000 || scaleZ > 1000 ||
-            scaleX < 0.001 || scaleY < 0.001 || scaleZ < 0.001) {
-          console.error('⚠️ Invalid scale factors calculated:', { scaleX, scaleY, scaleZ, targetSize, originalSize });
+            scaleX > 10 || scaleY > 10 || scaleZ > 10 ||
+            scaleX < 0.01 || scaleY < 0.01 || scaleZ < 0.01) {
+          console.error('⚠️ Invalid scale factors calculated:', { 
+            scaleX, scaleY, scaleZ, 
+            targetSize, 
+            originalSize, 
+            adjustedOriginalSize,
+            likelyInMeters 
+          });
           return;
         }
         
