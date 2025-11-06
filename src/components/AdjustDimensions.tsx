@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
@@ -12,25 +12,31 @@ interface AdjustDimensionsProps {
 }
 
 export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: AdjustDimensionsProps) => {
-  // Initialize state from selectedComponent dimensions
-  const [length, setLength] = useState<number>(
-    selectedComponent.dimensions.length || 100
-  );
-  const [width, setWidth] = useState<number>(
-    selectedComponent.dimensions.width || 100
-  );
+  // Helper to round and clamp values
+  const roundAndClamp = (value: number): number => {
+    return Math.max(10, Math.min(500, Math.round(value)));
+  };
+
+  // Initialize state from selectedComponent dimensions (rounded)
+  const initialLength = roundAndClamp(selectedComponent.dimensions.length || 100);
+  const initialWidth = roundAndClamp(selectedComponent.dimensions.width || 100);
+  
+  const [length, setLength] = useState<number>(initialLength);
+  const [width, setWidth] = useState<number>(initialWidth);
 
   // Sync state when selectedComponent changes
   useEffect(() => {
-    setLength(selectedComponent.dimensions.length || 100);
-    setWidth(selectedComponent.dimensions.width || 100);
+    const newLength = roundAndClamp(selectedComponent.dimensions.length || 100);
+    const newWidth = roundAndClamp(selectedComponent.dimensions.width || 100);
+    setLength(newLength);
+    setWidth(newWidth);
   }, [selectedComponent.id, selectedComponent.dimensions.length, selectedComponent.dimensions.width]);
 
   // Helper function to update dimensions and notify parent
   const updateDimensions = (newLength: number, newWidth: number) => {
-    // Clamp values to valid range
-    const clampedLength = Math.max(10, Math.min(500, newLength));
-    const clampedWidth = Math.max(10, Math.min(500, newWidth));
+    // Clamp values to valid range and round
+    const clampedLength = roundAndClamp(newLength);
+    const clampedWidth = roundAndClamp(newWidth);
 
     setLength(clampedLength);
     setWidth(clampedWidth);
@@ -65,13 +71,46 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
     updateDimensions(length, width - 1);
   };
 
-  // Slider handlers
+  // Slider handlers - using refs to avoid stale closure issues
+  const lengthRef = useRef(length);
+  const widthRef = useRef(width);
+  
+  // Keep refs in sync with state
+  useEffect(() => {
+    lengthRef.current = length;
+    widthRef.current = width;
+  }, [length, width]);
+
   const handleLengthSliderChange = (values: number[]) => {
-    updateDimensions(values[0], width);
+    const newLength = roundAndClamp(values[0]);
+    setLength(newLength);
+    
+    // Update component with current width from ref
+    const updatedComponent: ConveyorComponent = {
+      ...selectedComponent,
+      dimensions: {
+        ...selectedComponent.dimensions,
+        length: newLength,
+        width: widthRef.current,
+      },
+    };
+    onUpdateComponent(updatedComponent);
   };
 
   const handleWidthSliderChange = (values: number[]) => {
-    updateDimensions(length, values[0]);
+    const newWidth = roundAndClamp(values[0]);
+    setWidth(newWidth);
+    
+    // Update component with current length from ref
+    const updatedComponent: ConveyorComponent = {
+      ...selectedComponent,
+      dimensions: {
+        ...selectedComponent.dimensions,
+        length: lengthRef.current,
+        width: newWidth,
+      },
+    };
+    onUpdateComponent(updatedComponent);
   };
 
   return (
@@ -95,7 +134,7 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
                 <ArrowDown className="h-4 w-4" />
               </Button>
               <span className="text-sm font-medium min-w-[3rem] text-center">
-                {length}
+                {Math.round(length)}
               </span>
               <Button
                 variant="outline"
@@ -133,7 +172,7 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
                 <ArrowDown className="h-4 w-4" />
               </Button>
               <span className="text-sm font-medium min-w-[3rem] text-center">
-                {width}
+                {Math.round(width)}
               </span>
               <Button
                 variant="outline"

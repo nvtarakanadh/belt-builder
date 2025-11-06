@@ -474,7 +474,7 @@ const Index = () => {
                     
                     // Also update the corresponding SceneComponent's bounding_box
                     // to reflect dimension changes in the 3D preview
-                    if (component.dimensions && selectedComponent) {
+                    if (component.dimensions && component.id) {
                       const sceneComp = sceneComponents.find(c => c.id === component.id);
                       if (sceneComp && sceneComp.bounding_box) {
                         // Calculate center of current bounding box to preserve position
