@@ -178,6 +178,11 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
     
     // Use the latest selectedComponent from ref, not closure
     const currentComponent = selectedComponentRef.current;
+    if (!currentComponent) {
+      console.warn('⚠️ Cannot notify parent: selectedComponent is not available');
+      return;
+    }
+    
     const updatedComponent: ConveyorComponent = {
       ...currentComponent,
       dimensions: {

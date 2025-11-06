@@ -133,7 +133,7 @@ export const Toolbar = ({ onToolSelect, activeTool, viewMode, onViewModeChange, 
               <Button 
                 variant={showGrid ? 'default' : 'ghost'} 
                 size="icon"
-                onClick={onToggleGrid}
+                onClick={() => onToggleGrid?.()}
               >
                 <Grid3x3 className="h-4 w-4" />
               </Button>
