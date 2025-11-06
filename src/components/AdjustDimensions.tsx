@@ -31,30 +31,39 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
   // Sync state when selectedComponent changes
   // Only update if component ID changed OR if we're not currently updating (to avoid reset loop)
   useEffect(() => {
+    // Skip if we're in the middle of updating (prevents reset loop)
+    if (isUpdatingRef.current) {
+      console.log('⏸️ Skipping useEffect sync - update in progress');
+      return;
+    }
+
     const isDifferentComponent = prevComponentIdRef.current !== selectedComponent.id;
     
     if (isDifferentComponent) {
       // Different component - always sync
       const newLength = roundAndClamp(selectedComponent.dimensions.length || 100);
       const newWidth = roundAndClamp(selectedComponent.dimensions.width || 100);
+      console.log('🔄 Syncing from different component:', { newLength, newWidth });
       setLength(newLength);
       setWidth(newWidth);
+      lengthRef.current = newLength;
+      widthRef.current = newWidth;
       prevComponentIdRef.current = selectedComponent.id;
-      isUpdatingRef.current = false;
-    } else if (!isUpdatingRef.current) {
-      // Same component, but we're not updating - sync from props
-      // This handles external updates (e.g., from backend)
+    } else {
+      // Same component - only sync if values are significantly different (external update)
       const newLength = roundAndClamp(selectedComponent.dimensions.length || 100);
       const newWidth = roundAndClamp(selectedComponent.dimensions.width || 100);
-      // Only update if values actually changed to avoid unnecessary renders
-      setLength(prev => {
-        const rounded = roundAndClamp(selectedComponent.dimensions.length || 100);
-        return Math.abs(prev - rounded) > 0.1 ? rounded : prev;
-      });
-      setWidth(prev => {
-        const rounded = roundAndClamp(selectedComponent.dimensions.width || 100);
-        return Math.abs(prev - rounded) > 0.1 ? rounded : prev;
-      });
+      const currentLength = lengthRef.current;
+      const currentWidth = widthRef.current;
+      
+      // Only sync if the difference is significant (more than rounding error)
+      if (Math.abs(currentLength - newLength) > 1 || Math.abs(currentWidth - newWidth) > 1) {
+        console.log('🔄 Syncing from external update:', { newLength, newWidth, currentLength, currentWidth });
+        setLength(newLength);
+        setWidth(newWidth);
+        lengthRef.current = newLength;
+        widthRef.current = newWidth;
+      }
     }
   }, [selectedComponent.id, selectedComponent.dimensions.length, selectedComponent.dimensions.width]);
 
