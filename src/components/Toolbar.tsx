@@ -26,6 +26,8 @@ interface ToolbarProps {
   activeTool: string;
   viewMode: 'focused' | 'shopfloor';
   onViewModeChange: (mode: 'focused' | 'shopfloor') => void;
+  showGrid?: boolean;
+  onToggleGrid?: () => void;
   onUndo?: () => void;
   onRedo?: () => void;
   canUndo?: boolean;
@@ -34,7 +36,7 @@ interface ToolbarProps {
   saveStatus?: 'idle' | 'saving' | 'saved' | 'error';
 }
 
-export const Toolbar = ({ onToolSelect, activeTool, viewMode, onViewModeChange, onUndo, onRedo, canUndo = false, canRedo = false, onSave, saveStatus = 'idle' }: ToolbarProps) => {
+export const Toolbar = ({ onToolSelect, activeTool, viewMode, onViewModeChange, showGrid = true, onToggleGrid, onUndo, onRedo, canUndo = false, canRedo = false, onSave, saveStatus = 'idle' }: ToolbarProps) => {
   return (
     <TooltipProvider>
       <div className="panel-glass px-4 py-3 flex items-center gap-2">
@@ -128,7 +130,11 @@ export const Toolbar = ({ onToolSelect, activeTool, viewMode, onViewModeChange, 
         <div className="flex gap-1">
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon">
+              <Button 
+                variant={showGrid ? 'default' : 'ghost'} 
+                size="icon"
+                onClick={onToggleGrid}
+              >
                 <Grid3x3 className="h-4 w-4" />
               </Button>
             </TooltipTrigger>

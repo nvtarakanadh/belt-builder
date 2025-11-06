@@ -23,6 +23,7 @@ type SceneComponent = {
 interface SceneProps {
   onSelectComponent: (id: string) => void;
   viewMode?: 'focused' | 'shopfloor';
+  showGrid?: boolean;
   components?: SceneComponent[];
   onAddComponent?: (component: Omit<SceneComponent, 'id'>) => void;
   onUpdateComponent?: (id: string, update: Partial<SceneComponent>) => void;
@@ -397,6 +398,7 @@ function TransformControlWrapper({
 export const Scene = ({ 
   onSelectComponent, 
   viewMode = 'focused',
+  showGrid = true,
   components = [],
   onAddComponent,
   onUpdateComponent,
@@ -540,19 +542,21 @@ export const Scene = ({
         <Environment preset="warehouse" />
 
         {/* Grid floor */}
-        <Grid 
-          args={viewMode === 'shopfloor' ? [100, 100] : [50, 50]}
-          cellSize={1}
-          cellThickness={0.5}
-          cellColor="#2a2a2a"
-          sectionSize={5}
-          sectionThickness={1}
-          sectionColor="#00b4d8"
-          fadeDistance={viewMode === 'shopfloor' ? 80 : 40}
-          fadeStrength={1}
-          followCamera={false}
-          infiniteGrid
-        />
+        {showGrid && (
+          <Grid 
+            args={viewMode === 'shopfloor' ? [100, 100] : [50, 50]}
+            cellSize={1}
+            cellThickness={0.5}
+            cellColor="#2a2a2a"
+            sectionSize={5}
+            sectionThickness={1}
+            sectionColor="#00b4d8"
+            fadeDistance={viewMode === 'shopfloor' ? 80 : 40}
+            fadeStrength={1}
+            followCamera={false}
+            infiniteGrid
+          />
+        )}
 
         {/* Floor plane for shadows */}
         <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.01, 0]} receiveShadow>

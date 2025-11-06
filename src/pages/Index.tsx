@@ -28,6 +28,7 @@ const Index = () => {
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
   const [viewMode, setViewMode] = useState<'focused' | 'shopfloor'>('focused');
+  const [showGrid, setShowGrid] = useState<boolean>(true);
   const [sceneComponents, setSceneComponents] = useState<SceneComponent[]>([]);
   const [currentProjectId, setCurrentProjectId] = useState<number | null>(null);
   const hasLoadedRef = useRef(false); // Track if initial load has happened
@@ -789,6 +790,8 @@ const Index = () => {
         activeTool={activeTool} 
         viewMode={viewMode}
         onViewModeChange={setViewMode}
+        showGrid={showGrid}
+        onToggleGrid={() => setShowGrid(!showGrid)}
         onUndo={handleUndo}
         onRedo={handleRedo}
         canUndo={historyIndex > 0}
@@ -821,6 +824,7 @@ const Index = () => {
           <Scene 
             onSelectComponent={handleSelectComponent}
             viewMode={viewMode}
+            showGrid={showGrid}
             components={sceneComponents}
             onAddComponent={handleAddComponent}
             onUpdateComponent={handleUpdateComponent}
@@ -856,16 +860,16 @@ const Index = () => {
                   onDeleteComponent={handleDeleteComponent}
                   onUpdateComponent={(component) => {
                     console.log('📦 PropertiesPanel onUpdateComponent called with:', component);
+                    console.log('📦 Component dimensions provided:', component.dimensions);
                     
-                    // Always update selectedComponent - AdjustDimensions handles its own state
-                    // The useEffect in AdjustDimensions only syncs on component ID change, not dimension changes
+                    // Always update selectedComponent with the EXACT dimensions provided
+                    // Do NOT recalculate from bounding box - use the values as-is
                     setSelectedComponent(component);
                     
                     // Also update the corresponding SceneComponent's bounding_box
                     // to reflect dimension changes in the 3D preview
                     if (component.dimensions && component.id) {
                       console.log('📦 Updating SceneComponent bounding_box for:', component.id);
-                      console.log('📦 Component dimensions:', component.dimensions);
                       const sceneComp = sceneComponents.find(c => c.id === component.id);
                       if (sceneComp) {
                         // Calculate center based on existing bounding box if present, else use current position
@@ -877,29 +881,28 @@ const Index = () => {
                           (oldMin[2] + oldMax[2]) / 2,
                         ];
                         
-                        // Calculate previous dimensions from bounding box
-                        // Mapping: width = X-axis, height = Y-axis, length = Z-axis
-                        const prevWidth = Math.abs(oldMax[0] - oldMin[0]) || 1;
-                        const prevHeight = Math.abs(oldMax[1] - oldMin[1]) || 1;
-                        const prevLength = Math.abs(oldMax[2] - oldMin[2]) || 1;
-                        
-                        // Use the provided dimension values, only fall back to previous if not provided
-                        // Convert to numbers and ensure they're valid
+                        // Use the EXACT provided dimension values - do NOT recalculate from bounding box
+                        // This ensures we use the values from AdjustDimensions component
                         const newWidth = (component.dimensions.width !== undefined && component.dimensions.width !== null && component.dimensions.width > 0)
                           ? Number(component.dimensions.width)
-                          : prevWidth;
+                          : Math.abs(oldMax[0] - oldMin[0]) || 1;
                         const newHeight = (component.dimensions.height !== undefined && component.dimensions.height !== null && component.dimensions.height > 0)
                           ? Number(component.dimensions.height)
-                          : prevHeight;
+                          : Math.abs(oldMax[1] - oldMin[1]) || 1;
                         const newLength = (component.dimensions.length !== undefined && component.dimensions.length !== null && component.dimensions.length > 0)
                           ? Number(component.dimensions.length)
-                          : prevLength;
+                          : Math.abs(oldMax[2] - oldMin[2]) || 1;
                         
-                        console.log('📏 Dimension update:', { 
-                          prev: { prevWidth, prevHeight, prevLength },
+                        console.log('📏 Dimension update (using provided values):', { 
                           new: { newWidth, newHeight, newLength },
                           provided: component.dimensions 
                         });
+                        
+                        // Validate dimensions are reasonable (prevent huge jumps)
+                        if (newWidth > 1000 || newHeight > 2000 || newLength > 10000) {
+                          console.error('⚠️ Suspicious dimension values detected:', { newWidth, newHeight, newLength });
+                          return; // Reject suspicious values
+                        }
                         
                         // Create new bounding box centered at the same position
                         // Ensure dimensions are valid (at least 1mm)
