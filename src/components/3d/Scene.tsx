@@ -4,7 +4,7 @@ import { useLoader } from '@react-three/fiber';
 // type-only declarations are provided in src/types/three-extensions.d.ts
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader';
-import { useState, useCallback, useRef, Suspense, useEffect } from 'react';
+import { useState, useCallback, useRef, Suspense, useEffect, useMemo } from 'react';
 import * as THREE from 'three';
 
 type SceneComponent = {
@@ -37,7 +37,7 @@ function GLBModelContent({ url, position, rotation, selected, onSelect }: {
   selected?: boolean;
   onSelect?: () => void;
 }) {
-  console.log(`GLBModelContent: Loading GLB from ${url}`);
+  console.log(`GLBModelContent: Loading GLB from ${url}, selected=${selected}`);
   
   // useGLTF throws a promise during loading (handled by Suspense)
   // Don't wrap in try-catch - let Suspense handle the promise
@@ -50,25 +50,36 @@ function GLBModelContent({ url, position, rotation, selected, onSelect }: {
   
   console.log(`GLBModelContent: Successfully loaded GLB from ${url}`);
   
-  // Clone and apply selection highlight
-  const clonedScene = scene.clone();
-  if (selected) {
+  // Clone scene and set up reactive highlighting
+  const clonedScene = useMemo(() => scene.clone(), [scene]);
+  
+  // Update highlighting based on selection state
+  useEffect(() => {
     clonedScene.traverse((child) => {
       if ((child as THREE.Mesh).isMesh) {
         const mesh = child as THREE.Mesh;
         const material = mesh.material as THREE.MeshStandardMaterial;
         if (material) {
-          material.emissive = new THREE.Color(0x00b4d8);
-          material.emissiveIntensity = 0.3;
+          if (selected) {
+            material.emissive = new THREE.Color(0x00b4d8);
+            material.emissiveIntensity = 0.3;
+          } else {
+            material.emissive = new THREE.Color(0x000000);
+            material.emissiveIntensity = 0;
+          }
+          material.needsUpdate = true;
         }
       }
     });
-  }
+  }, [selected, clonedScene]);
   
   return (
     <primitive
       object={clonedScene}
-      onClick={onSelect}
+      onClick={(e: any) => {
+        e.stopPropagation();
+        onSelect?.();
+      }}
       onPointerOver={(e: any) => {
         e.stopPropagation();
         document.body.style.cursor = 'pointer';
@@ -124,7 +135,10 @@ function ComponentPlaceholder({
   return (
     <mesh
       position={position}
-      onClick={onSelect}
+      onClick={(e: any) => {
+        e.stopPropagation();
+        onSelect?.();
+      }}
       onPointerOver={(e: any) => {
         e.stopPropagation();
         document.body.style.cursor = 'pointer';
@@ -226,11 +240,36 @@ function OBJModelContent({ url, position, rotation, selected, onSelect }: {
 }) {
   const obj = (useLoader as any)(OBJLoader as any, url) as THREE.Group;
   
+  // Apply selection highlighting to OBJ models
+  useEffect(() => {
+    if (obj) {
+      obj.traverse((child) => {
+        if ((child as THREE.Mesh).isMesh) {
+          const mesh = child as THREE.Mesh;
+          const material = mesh.material as THREE.MeshStandardMaterial;
+          if (material) {
+            if (selected) {
+              material.emissive = new THREE.Color(0x00b4d8);
+              material.emissiveIntensity = 0.3;
+            } else {
+              material.emissive = new THREE.Color(0x000000);
+              material.emissiveIntensity = 0;
+            }
+            material.needsUpdate = true;
+          }
+        }
+      });
+    }
+  }, [selected, obj]);
+  
   return (
     <group position={position} rotation={rotation}>
       <primitive 
         object={obj} 
-        onClick={onSelect}
+        onClick={(e: any) => {
+          e.stopPropagation();
+          onSelect?.();
+        }}
         onPointerOver={(e: any) => {
           e.stopPropagation();
           document.body.style.cursor = 'pointer';
@@ -403,10 +442,33 @@ export const Scene = ({
     }
   }, [onAddComponent]);
 
-  const handleSelect = (id: string) => {
+  const handleSelect = (id: string, e?: any) => {
+    if (e) {
+      e.stopPropagation();
+    }
+    console.log(`🎯 Selecting component: ${id}, previous: ${selectedId}`);
     setSelectedId(id);
     onSelectComponent(id);
   };
+  
+  // Handle clicking on empty space to deselect
+  const handleCanvasClick = useCallback((e: any) => {
+    // Only deselect if clicking directly on the canvas/background, not on a component
+    if (e.object === e.eventObject || e.object === e.intersections?.[0]?.object) {
+      // Check if we clicked on a component or empty space
+      const clickedComponent = components.find(comp => {
+        // This is a simple check - in practice, the click handler on components should stop propagation
+        return false;
+      });
+      
+      // If no component was clicked and we have a selection, deselect
+      if (selectedId && !clickedComponent) {
+        console.log('🎯 Deselecting - clicked on empty space');
+        setSelectedId(null);
+        onSelectComponent('');
+      }
+    }
+  }, [selectedId, components, onSelectComponent]);
 
   const cameraPosition: [number, number, number] = viewMode === 'shopfloor' 
     ? [40, 30, 40] 
@@ -420,7 +482,17 @@ export const Scene = ({
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      <Canvas shadows>
+      <Canvas 
+        shadows
+        onClick={(e) => {
+          // Deselect if clicking on empty space (not on a component)
+          if (e.object === e.eventObject && selectedId) {
+            console.log('🎯 Clicked on canvas background, deselecting');
+            setSelectedId(null);
+            onSelectComponent('');
+          }
+        }}
+      >
         <PerspectiveCamera makeDefault position={cameraPosition} fov={50} />
         <OrbitControls 
           enablePan={activeTool === 'select'}
@@ -494,7 +566,7 @@ export const Scene = ({
                 position={[0, 0, 0]}
                 rotation={[0, 0, 0]}
                 selected={selectedId === comp.id}
-                onSelect={() => handleSelect(comp.id)}
+                onSelect={(e?: any) => handleSelect(comp.id, e)}
               />
             );
           } else if (originalUrl && isSTL) {
@@ -504,7 +576,7 @@ export const Scene = ({
                 position={comp.position}
                 rotation={comp.rotation || [0, 0, 0]}
                 selected={selectedId === comp.id}
-                onSelect={() => handleSelect(comp.id)}
+                onSelect={(e?: any) => handleSelect(comp.id, e)}
               />
             );
           } else if (originalUrl && isOBJ) {
@@ -514,7 +586,7 @@ export const Scene = ({
                 position={comp.position}
                 rotation={comp.rotation || [0, 0, 0]}
                 selected={selectedId === comp.id}
-                onSelect={() => handleSelect(comp.id)}
+                onSelect={(e?: any) => handleSelect(comp.id, e)}
               />
             );
           } else if (originalUrl && isSTEP) {
@@ -526,7 +598,7 @@ export const Scene = ({
                 bounding_box={comp.bounding_box}
                 category={comp.category}
                 selected={selectedId === comp.id}
-                onSelect={() => handleSelect(comp.id)}
+                onSelect={(e?: any) => handleSelect(comp.id, e)}
               />
             );
           } else {
@@ -538,7 +610,7 @@ export const Scene = ({
                 bounding_box={comp.bounding_box}
                 category={comp.category}
                 selected={selectedId === comp.id}
-                onSelect={() => handleSelect(comp.id)}
+                onSelect={(e?: any) => handleSelect(comp.id, e)}
               />
             );
           }
@@ -553,7 +625,7 @@ export const Scene = ({
                 bounding_box={comp.bounding_box}
                 category={comp.category}
                 selected={selectedId === comp.id}
-                onSelect={() => handleSelect(comp.id)}
+                onSelect={(e?: any) => handleSelect(comp.id, e)}
               />
             );
           }
