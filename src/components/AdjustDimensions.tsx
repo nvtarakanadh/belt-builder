@@ -48,7 +48,7 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
       // Different component - always sync
       const newLength = roundAndClamp(selectedComponent.dimensions.length || 100);
       const newWidth = roundAndClamp(selectedComponent.dimensions.width || 100);
-      console.log('🔄 Syncing from different component:', { newLength, newWidth });
+      console.log('🔄 Syncing from different component:', { newLength, newWidth, currentState: { length, width } });
       setLength(newLength);
       setWidth(newWidth);
       lengthRef.current = newLength;
@@ -58,6 +58,7 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
     }
     // Don't sync dimensions from props when component ID is the same
     // This prevents the reset loop when we update dimensions ourselves
+    // The local state (length/width) is the source of truth for the UI
   }, [selectedComponent.id]); // Only depend on ID, not dimensions!
 
   // Helper function to update dimensions and notify parent
@@ -73,16 +74,23 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
       newValues: { newLength, newWidth }
     });
 
-    // Set flag to prevent useEffect from resetting our values
-    isUpdatingRef.current = true;
+    // Update local state FIRST - this will trigger re-render with new values
+    // We use functional updates to ensure we get the latest state
+    setLength(prev => {
+      console.log('📊 setLength called:', { prev, clampedLength });
+      return clampedLength;
+    });
+    setWidth(prev => {
+      console.log('📊 setWidth called:', { prev, clampedWidth });
+      return clampedWidth;
+    });
 
-    // Update refs immediately (before state update)
+    // Update refs immediately (after state update is queued)
     lengthRef.current = clampedLength;
     widthRef.current = clampedWidth;
 
-    // Update local state - this will trigger re-render with new values
-    setLength(clampedLength);
-    setWidth(clampedWidth);
+    // Set flag to prevent useEffect from resetting our values
+    isUpdatingRef.current = true;
 
     // Update the component and notify parent - use ref to get latest component
     const currentComponent = componentRef.current;

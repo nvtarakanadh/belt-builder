@@ -472,18 +472,9 @@ const Index = () => {
                   onUpdateComponent={(component) => {
                     console.log('📦 PropertiesPanel onUpdateComponent called with:', component);
                     
-                    // Update selectedComponent, but only if dimensions actually changed
-                    // This prevents unnecessary re-renders that reset the AdjustDimensions component
-                    setSelectedComponent(prev => {
-                      // Only update if dimensions actually changed to avoid reset loop
-                      const dimsChanged = prev?.dimensions?.length !== component.dimensions?.length ||
-                                        prev?.dimensions?.width !== component.dimensions?.width;
-                      
-                      if (dimsChanged || prev?.id !== component.id) {
-                        return component;
-                      }
-                      return prev;
-                    });
+                    // Always update selectedComponent - AdjustDimensions handles its own state
+                    // The useEffect in AdjustDimensions only syncs on component ID change, not dimension changes
+                    setSelectedComponent(component);
                     
                     // Also update the corresponding SceneComponent's bounding_box
                     // to reflect dimension changes in the 3D preview
