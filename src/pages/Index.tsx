@@ -470,11 +470,13 @@ const Index = () => {
                 <PropertiesPanel 
                   selectedComponent={selectedComponent}
                   onUpdateComponent={(component) => {
+                    console.log('📦 PropertiesPanel onUpdateComponent called with:', component);
                     setSelectedComponent(component);
                     
                     // Also update the corresponding SceneComponent's bounding_box
                     // to reflect dimension changes in the 3D preview
                     if (component.dimensions && component.id) {
+                      console.log('📦 Updating SceneComponent bounding_box for:', component.id);
                       const sceneComp = sceneComponents.find(c => c.id === component.id);
                       if (sceneComp && sceneComp.bounding_box) {
                         // Calculate center of current bounding box to preserve position

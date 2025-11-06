@@ -18,11 +18,11 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
   };
 
   // Initialize state from selectedComponent dimensions (rounded)
-  const initialLength = roundAndClamp(selectedComponent.dimensions.length || 100);
-  const initialWidth = roundAndClamp(selectedComponent.dimensions.width || 100);
+  const getInitialLength = () => roundAndClamp(selectedComponent.dimensions.length || 100);
+  const getInitialWidth = () => roundAndClamp(selectedComponent.dimensions.width || 100);
   
-  const [length, setLength] = useState<number>(initialLength);
-  const [width, setWidth] = useState<number>(initialWidth);
+  const [length, setLength] = useState<number>(getInitialLength());
+  const [width, setWidth] = useState<number>(getInitialWidth());
 
   // Sync state when selectedComponent changes
   useEffect(() => {
@@ -32,25 +32,35 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
     setWidth(newWidth);
   }, [selectedComponent.id, selectedComponent.dimensions.length, selectedComponent.dimensions.width]);
 
+  // Use ref to track latest selectedComponent to avoid stale closures
+  const componentRef = useRef(selectedComponent);
+  useEffect(() => {
+    componentRef.current = selectedComponent;
+  }, [selectedComponent]);
+
   // Helper function to update dimensions and notify parent
   const updateDimensions = (newLength: number, newWidth: number) => {
     // Clamp values to valid range and round
     const clampedLength = roundAndClamp(newLength);
     const clampedWidth = roundAndClamp(newWidth);
 
+    console.log('🔧 Updating dimensions:', { clampedLength, clampedWidth });
+
     setLength(clampedLength);
     setWidth(clampedWidth);
 
-    // Update the component and notify parent
+    // Update the component and notify parent - use ref to get latest component
+    const currentComponent = componentRef.current;
     const updatedComponent: ConveyorComponent = {
-      ...selectedComponent,
+      ...currentComponent,
       dimensions: {
-        ...selectedComponent.dimensions,
+        ...currentComponent.dimensions,
         length: clampedLength,
         width: clampedWidth,
       },
     };
 
+    console.log('🔧 Calling onUpdateComponent with:', updatedComponent);
     onUpdateComponent(updatedComponent);
   };
 
@@ -89,34 +99,12 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
 
   const handleLengthSliderChange = (values: number[]) => {
     const newLength = roundAndClamp(values[0]);
-    setLength(newLength);
-    
-    // Update component with current width from ref
-    const updatedComponent: ConveyorComponent = {
-      ...selectedComponent,
-      dimensions: {
-        ...selectedComponent.dimensions,
-        length: newLength,
-        width: widthRef.current,
-      },
-    };
-    onUpdateComponent(updatedComponent);
+    updateDimensions(newLength, widthRef.current);
   };
 
   const handleWidthSliderChange = (values: number[]) => {
     const newWidth = roundAndClamp(values[0]);
-    setWidth(newWidth);
-    
-    // Update component with current length from ref
-    const updatedComponent: ConveyorComponent = {
-      ...selectedComponent,
-      dimensions: {
-        ...selectedComponent.dimensions,
-        length: lengthRef.current,
-        width: newWidth,
-      },
-    };
-    onUpdateComponent(updatedComponent);
+    updateDimensions(lengthRef.current, newWidth);
   };
 
   return (
