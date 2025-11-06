@@ -471,6 +471,45 @@ const Index = () => {
                   selectedComponent={selectedComponent}
                   onUpdateComponent={(component) => {
                     setSelectedComponent(component);
+                    
+                    // Also update the corresponding SceneComponent's bounding_box
+                    // to reflect dimension changes in the 3D preview
+                    if (component.dimensions && selectedComponent) {
+                      const sceneComp = sceneComponents.find(c => c.id === component.id);
+                      if (sceneComp && sceneComp.bounding_box) {
+                        // Calculate center of current bounding box to preserve position
+                        const oldMin = sceneComp.bounding_box.min || [0, 0, 0];
+                        const oldMax = sceneComp.bounding_box.max || [0, 0, 0];
+                        const oldCenter = [
+                          (oldMin[0] + oldMax[0]) / 2,
+                          (oldMin[1] + oldMax[1]) / 2,
+                          (oldMin[2] + oldMax[2]) / 2,
+                        ];
+                        
+                        // Calculate new dimensions (preserve height if not changed)
+                        const newWidth = component.dimensions.width || (oldMax[0] - oldMin[0]);
+                        const newHeight = component.dimensions.height || (oldMax[1] - oldMin[1]);
+                        const newLength = component.dimensions.length || (oldMax[2] - oldMin[2]);
+                        
+                        // Create new bounding box centered at the same position
+                        const newBoundingBox = {
+                          min: [
+                            oldCenter[0] - newWidth / 2,
+                            oldCenter[1] - newHeight / 2,
+                            oldCenter[2] - newLength / 2,
+                          ],
+                          max: [
+                            oldCenter[0] + newWidth / 2,
+                            oldCenter[1] + newHeight / 2,
+                            oldCenter[2] + newLength / 2,
+                          ],
+                        };
+                        
+                        handleUpdateComponent(component.id, {
+                          bounding_box: newBoundingBox,
+                        });
+                      }
+                    }
                   }}
                 />
               </TabsContent>

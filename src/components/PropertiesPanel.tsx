@@ -8,6 +8,7 @@ import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { Info } from "lucide-react";
 import { ConveyorComponent } from "@/types/conveyor";
+import { AdjustDimensions } from "@/components/AdjustDimensions";
 
 interface PropertiesPanelProps {
   selectedComponent: ConveyorComponent | null;
@@ -57,28 +58,15 @@ export const PropertiesPanel = ({ selectedComponent, onUpdateComponent }: Proper
 
             <Separator />
 
-            {selectedComponent.dimensions.length && (
-              <div className="space-y-2">
-                <Label>Length (mm)</Label>
-                <Input 
-                  type="number"
-                  value={selectedComponent.dimensions.length} 
-                  className="bg-secondary"
-                />
-              </div>
+            {/* Interactive Dimension Controls */}
+            {(selectedComponent.dimensions.length || selectedComponent.dimensions.width) && (
+              <AdjustDimensions
+                selectedComponent={selectedComponent}
+                onUpdateComponent={onUpdateComponent}
+              />
             )}
 
-            {selectedComponent.dimensions.width && (
-              <div className="space-y-2">
-                <Label>Width (mm)</Label>
-                <Input 
-                  type="number"
-                  value={selectedComponent.dimensions.width} 
-                  className="bg-secondary"
-                />
-              </div>
-            )}
-
+            {/* Legacy dimension inputs for height and diameter (if needed) */}
             {selectedComponent.dimensions.height && (
               <div className="space-y-2">
                 <Label>Height (mm)</Label>
