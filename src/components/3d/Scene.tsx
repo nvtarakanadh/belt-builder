@@ -149,11 +149,19 @@ function GLBModelContent({ url, position, rotation, selected, onSelect, targetSi
   // Initialize original size on first load
   useEffect(() => {
     if (!originalSizeRef.current) {
+      // Reset scale to 1,1,1 before measuring to ensure we get the true original size
+      clonedScene.scale.set(1, 1, 1);
       const box = new THREE.Box3().setFromObject(clonedScene);
       const size = new THREE.Vector3();
       box.getSize(size);
       originalSizeRef.current = size.clone();
       console.log(`GLBModelContent: Stored original size:`, size);
+      
+      // Log a warning if the original size seems to be in meters (very small values)
+      const maxDim = Math.max(size.x, size.y, size.z);
+      if (maxDim < 1) {
+        console.warn(`⚠️ GLBModelContent: Original model size is very small (${maxDim.toFixed(3)} units). Model might be in meters. Expected mm.`);
+      }
     }
   }, [clonedScene]);
   
@@ -182,6 +190,9 @@ function GLBModelContent({ url, position, rotation, selected, onSelect, targetSi
     if (!originalSizeRef.current) return;
     
     try {
+      // Reset scale to 1,1,1 before applying new scale to prevent cumulative scaling
+      clonedScene.scale.set(1, 1, 1);
+      
       // Always scale relative to the original unscaled size, not the current size
       const originalSize = originalSizeRef.current;
       
