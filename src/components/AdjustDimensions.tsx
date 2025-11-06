@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
@@ -17,137 +17,80 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
     return Math.max(10, Math.min(500, Math.round(value)));
   };
 
-  // Initialize state from selectedComponent dimensions (rounded)
+  // Initialize state from selectedComponent dimensions
   const getInitialLength = () => roundAndClamp(selectedComponent.dimensions.length || 100);
   const getInitialWidth = () => roundAndClamp(selectedComponent.dimensions.width || 100);
   
   const [length, setLength] = useState<number>(getInitialLength());
   const [width, setWidth] = useState<number>(getInitialWidth());
-  const [forceUpdate, setForceUpdate] = useState(0);
 
-  // Track previous component ID to detect component changes
-  const prevComponentIdRef = useRef<string>(selectedComponent.id);
-  const isUpdatingRef = useRef<boolean>(false);
-  
-  // Slider handlers - using refs to avoid stale closure issues
-  // Initialize refs BEFORE useEffect that uses them
-  const lengthRef = useRef<number>(getInitialLength());
-  const widthRef = useRef<number>(getInitialWidth());
-  
-  // Use ref to track latest selectedComponent to avoid stale closures
-  const componentRef = useRef(selectedComponent);
-  useEffect(() => {
-    componentRef.current = selectedComponent;
-  }, [selectedComponent]);
+  // Track component ID to detect when component changes
+  const [componentId, setComponentId] = useState<string>(selectedComponent.id);
 
-  // Sync state when selectedComponent ID changes (NOT dimensions, to avoid reset loop)
-  // This ensures we only sync when a different component is selected, not when dimensions update
+  // Sync state when component ID changes
   useEffect(() => {
-    const isDifferentComponent = prevComponentIdRef.current !== selectedComponent.id;
-    
-    if (isDifferentComponent) {
-      // Different component - always sync
+    if (componentId !== selectedComponent.id) {
       const newLength = roundAndClamp(selectedComponent.dimensions.length || 100);
       const newWidth = roundAndClamp(selectedComponent.dimensions.width || 100);
-      console.log('🔄 Syncing from different component:', { newLength, newWidth, currentState: { length, width } });
       setLength(newLength);
       setWidth(newWidth);
-      lengthRef.current = newLength;
-      widthRef.current = newWidth;
-      prevComponentIdRef.current = selectedComponent.id;
-      isUpdatingRef.current = false;
+      setComponentId(selectedComponent.id);
     }
-    // Don't sync dimensions from props when component ID is the same
-    // This prevents the reset loop when we update dimensions ourselves
-    // The local state (length/width) is the source of truth for the UI
-  }, [selectedComponent.id]); // Only depend on ID, not dimensions!
+  }, [selectedComponent.id, componentId]);
 
-  // Helper function to update dimensions and notify parent
-  const updateDimensions = useCallback((newLength: number, newWidth: number) => {
-    // Clamp values to valid range and round
+  // Update parent component with new dimensions
+  const notifyParent = useCallback((newLength: number, newWidth: number) => {
     const clampedLength = roundAndClamp(newLength);
     const clampedWidth = roundAndClamp(newWidth);
 
-    console.log('🔧 Updating dimensions:', { 
-      clampedLength, 
-      clampedWidth, 
-      currentState: { length: lengthRef.current, width: widthRef.current },
-      newValues: { newLength, newWidth }
-    });
-
-    // Update local state FIRST - this will trigger re-render with new values
-    // We use functional updates to ensure we get the latest state
-    setLength(prev => {
-      console.log('📊 setLength called:', { prev, clampedLength, willChange: prev !== clampedLength });
-      return clampedLength;
-    });
-    setWidth(prev => {
-      console.log('📊 setWidth called:', { prev, clampedWidth, willChange: prev !== clampedWidth });
-      return clampedWidth;
-    });
-    
-    // Force update to ensure slider re-renders
-    setForceUpdate(prev => prev + 1);
-
-    // Update refs immediately (after state update is queued)
-    lengthRef.current = clampedLength;
-    widthRef.current = clampedWidth;
-
-    // Set flag to prevent useEffect from resetting our values
-    isUpdatingRef.current = true;
-
-    // Update the component and notify parent - use ref to get latest component
-    const currentComponent = componentRef.current;
     const updatedComponent: ConveyorComponent = {
-      ...currentComponent,
+      ...selectedComponent,
       dimensions: {
-        ...currentComponent.dimensions,
+        ...selectedComponent.dimensions,
         length: clampedLength,
         width: clampedWidth,
       },
     };
 
-    console.log('🔧 Calling onUpdateComponent with:', updatedComponent);
     onUpdateComponent(updatedComponent);
-    
-    // Reset flag after a short delay to allow parent updates to complete
-    setTimeout(() => {
-      isUpdatingRef.current = false;
-    }, 200);
-  }, [onUpdateComponent]);
+  }, [selectedComponent, onUpdateComponent]);
 
-  // Increment/Decrement handlers - use refs to get latest values
+  // Handlers for length
+  const handleLengthChange = useCallback((newLength: number) => {
+    const clamped = roundAndClamp(newLength);
+    setLength(clamped);
+    notifyParent(clamped, width);
+  }, [width, notifyParent]);
+
   const handleLengthIncrement = () => {
-    updateDimensions(lengthRef.current + 1, widthRef.current);
+    handleLengthChange(length + 1);
   };
 
   const handleLengthDecrement = () => {
-    updateDimensions(lengthRef.current - 1, widthRef.current);
+    handleLengthChange(length - 1);
   };
 
+  const handleLengthSliderChange = (values: number[]) => {
+    handleLengthChange(values[0]);
+  };
+
+  // Handlers for width
+  const handleWidthChange = useCallback((newWidth: number) => {
+    const clamped = roundAndClamp(newWidth);
+    setWidth(clamped);
+    notifyParent(length, clamped);
+  }, [length, notifyParent]);
+
   const handleWidthIncrement = () => {
-    updateDimensions(lengthRef.current, widthRef.current + 1);
+    handleWidthChange(width + 1);
   };
 
   const handleWidthDecrement = () => {
-    updateDimensions(lengthRef.current, widthRef.current - 1);
-  };
-
-  // Keep refs in sync with state - this ensures refs always have latest values
-  useEffect(() => {
-    lengthRef.current = length;
-    widthRef.current = width;
-    console.log('🔄 Refs updated:', { length, width });
-  }, [length, width]);
-
-  const handleLengthSliderChange = (values: number[]) => {
-    const newLength = roundAndClamp(values[0]);
-    updateDimensions(newLength, widthRef.current);
+    handleWidthChange(width - 1);
   };
 
   const handleWidthSliderChange = (values: number[]) => {
-    const newWidth = roundAndClamp(values[0]);
-    updateDimensions(lengthRef.current, newWidth);
+    handleWidthChange(values[0]);
   };
 
   return (
@@ -169,7 +112,6 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
-                  console.log('🔽 Length decrement clicked, current length:', length);
                   handleLengthDecrement();
                 }}
                 disabled={length <= 10}
@@ -177,7 +119,7 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
                 <ArrowDown className="h-4 w-4" />
               </Button>
               <span className="text-sm font-medium min-w-[3rem] text-center">
-                {Math.round(length)}
+                {length}
               </span>
               <Button
                 type="button"
@@ -187,7 +129,6 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
-                  console.log('🔼 Length increment clicked, current length:', length);
                   handleLengthIncrement();
                 }}
                 disabled={length >= 500}
@@ -197,12 +138,8 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
             </div>
           </div>
           <Slider
-            key={`length-${selectedComponent.id}-${forceUpdate}`}
-            value={[Math.round(length)]}
-            onValueChange={(values) => {
-              console.log('📏 Length slider changed to:', values[0], 'current state length:', length);
-              handleLengthSliderChange(values);
-            }}
+            value={[length]}
+            onValueChange={handleLengthSliderChange}
             min={10}
             max={500}
             step={1}
@@ -223,7 +160,6 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
-                  console.log('🔽 Width decrement clicked, current width:', width);
                   handleWidthDecrement();
                 }}
                 disabled={width <= 10}
@@ -231,7 +167,7 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
                 <ArrowDown className="h-4 w-4" />
               </Button>
               <span className="text-sm font-medium min-w-[3rem] text-center">
-                {Math.round(width)}
+                {width}
               </span>
               <Button
                 type="button"
@@ -241,7 +177,6 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
-                  console.log('🔼 Width increment clicked, current width:', width);
                   handleWidthIncrement();
                 }}
                 disabled={width >= 500}
@@ -251,12 +186,8 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
             </div>
           </div>
           <Slider
-            key={`width-${selectedComponent.id}-${forceUpdate}`}
-            value={[Math.round(width)]}
-            onValueChange={(values) => {
-              console.log('📏 Width slider changed to:', values[0], 'current state width:', width);
-              handleWidthSliderChange(values);
-            }}
+            value={[width]}
+            onValueChange={handleWidthSliderChange}
             min={10}
             max={500}
             step={1}
@@ -267,4 +198,3 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
     </Card>
   );
 };
-

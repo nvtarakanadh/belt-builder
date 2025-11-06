@@ -37,7 +37,7 @@ export const PropertiesPanel = ({ selectedComponent, onUpdateComponent }: Proper
         <p className="text-sm text-muted-foreground mt-1">{selectedComponent.name}</p>
       </div>
       
-      <ScrollArea className="flex-1 h-full">
+      <ScrollArea className="flex-1" style={{ height: '100%' }}>
         <div className="p-4">
           <Tabs defaultValue="specs">
           <TabsList className="grid w-full grid-cols-4">
