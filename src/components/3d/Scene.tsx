@@ -78,6 +78,7 @@ function GLBModelContent({ url, position, rotation, selected, onSelect }: {
       object={clonedScene}
       onClick={(e: any) => {
         e.stopPropagation();
+        console.log('🎯 GLB model clicked, calling onSelect');
         onSelect?.();
       }}
       onPointerOver={(e: any) => {
@@ -549,7 +550,7 @@ export const Scene = ({
                 position={[0, 0, 0]}
                 rotation={[0, 0, 0]}
                 selected={selectedId === comp.id}
-                onSelect={(e?: any) => handleSelect(comp.id, e)}
+                onSelect={() => handleSelect(comp.id)}
               />
             );
           } else if (originalUrl && isSTL) {
@@ -559,7 +560,7 @@ export const Scene = ({
                 position={comp.position}
                 rotation={comp.rotation || [0, 0, 0]}
                 selected={selectedId === comp.id}
-                onSelect={(e?: any) => handleSelect(comp.id, e)}
+                onSelect={() => handleSelect(comp.id)}
               />
             );
           } else if (originalUrl && isOBJ) {
@@ -569,7 +570,7 @@ export const Scene = ({
                 position={comp.position}
                 rotation={comp.rotation || [0, 0, 0]}
                 selected={selectedId === comp.id}
-                onSelect={(e?: any) => handleSelect(comp.id, e)}
+                onSelect={() => handleSelect(comp.id)}
               />
             );
           } else if (originalUrl && isSTEP) {
@@ -581,7 +582,7 @@ export const Scene = ({
                 bounding_box={comp.bounding_box}
                 category={comp.category}
                 selected={selectedId === comp.id}
-                onSelect={(e?: any) => handleSelect(comp.id, e)}
+                onSelect={() => handleSelect(comp.id)}
               />
             );
           } else {
@@ -593,7 +594,7 @@ export const Scene = ({
                 bounding_box={comp.bounding_box}
                 category={comp.category}
                 selected={selectedId === comp.id}
-                onSelect={(e?: any) => handleSelect(comp.id, e)}
+                onSelect={() => handleSelect(comp.id)}
               />
             );
           }
@@ -608,7 +609,7 @@ export const Scene = ({
                 bounding_box={comp.bounding_box}
                 category={comp.category}
                 selected={selectedId === comp.id}
-                onSelect={(e?: any) => handleSelect(comp.id, e)}
+                onSelect={() => handleSelect(comp.id)}
               />
             );
           }
