@@ -47,13 +47,15 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
   }, [selectedComponent]);
 
   // Helper function to update dimensions and notify parent
-  const updateDimensions = (newLength: number, newWidth: number) => {
+  // Use functional setState to avoid stale closures
+  const updateDimensions = useCallback((newLength: number, newWidth: number) => {
     // Clamp values to valid range and round
     const clampedLength = roundAndClamp(newLength);
     const clampedWidth = roundAndClamp(newWidth);
 
     console.log('🔧 Updating dimensions:', { clampedLength, clampedWidth });
 
+    // Update local state immediately using functional updates
     setLength(clampedLength);
     setWidth(clampedWidth);
 
@@ -70,7 +72,7 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
 
     console.log('🔧 Calling onUpdateComponent with:', updatedComponent);
     onUpdateComponent(updatedComponent);
-  };
+  }, [onUpdateComponent]);
 
   // Increment/Decrement handlers
   const handleLengthIncrement = () => {
