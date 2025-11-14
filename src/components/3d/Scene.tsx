@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, Suspense, useEffect, useMemo, ErrorInfo } from 'react';
-import { Canvas, useThree } from '@react-three/fiber';
+import { Canvas, useThree, useFrame } from '@react-three/fiber';
 import { OrbitControls, Grid, Environment, PerspectiveCamera, useGLTF, TransformControls } from '@react-three/drei';
 import { useLoader } from '@react-three/fiber';
 // type-only declarations are provided in src/types/three-extensions.d.ts
@@ -32,24 +32,19 @@ function DropHandler({
 }) {
   const { camera, gl } = useThree();
 
+  // Update refs immediately when component mounts
   useEffect(() => {
     if (onReady && camera && gl) {
       onReady(camera, gl);
     }
   }, [camera, gl, onReady]);
   
-  // Also update on every frame to ensure camera ref is always current
-  useEffect(() => {
-    const updateRefs = () => {
-      if (onReady && camera && gl) {
-        onReady(camera, gl);
-      }
-    };
-    
-    // Update refs periodically to catch camera movements
-    const interval = setInterval(updateRefs, 100);
-    return () => clearInterval(interval);
-  }, [camera, gl, onReady]);
+  // Update refs on every frame to ensure camera ref is always current (catches OrbitControls movements)
+  useFrame(() => {
+    if (onReady && camera && gl) {
+      onReady(camera, gl);
+    }
+  });
 
   return null;
 }
@@ -867,6 +862,7 @@ export const Scene = ({
           // Update camera and gl refs when Canvas is created/updated
           cameraRef.current = camera;
           glRef.current = gl;
+          console.log('Canvas created, camera and gl refs set');
         }}
         onPointerMissed={(e) => {
           // This fires when clicking on empty space (not on any 3D object)
@@ -876,8 +872,15 @@ export const Scene = ({
           }
         }}
         onDragOver={(e) => {
-          // Allow drag over on canvas - let it bubble to container
+          // Allow drag over on canvas - prevent default but don't stop propagation
           e.preventDefault();
+        }}
+        onDrop={(e) => {
+          // Handle drop on Canvas - forward to container handler
+          console.log('Canvas drop event received');
+          e.preventDefault();
+          e.stopPropagation();
+          handleDrop(e as any);
         }}
       >
         <PerspectiveCamera makeDefault position={cameraPosition} fov={50} />
