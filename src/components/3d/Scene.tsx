@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, Suspense, useEffect, useMemo } from 'react';
+import { useState, useCallback, useRef, Suspense, useEffect, useMemo, ErrorInfo } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls, Grid, Environment, PerspectiveCamera, useGLTF, TransformControls } from '@react-three/drei';
 import { useLoader } from '@react-three/fiber';
@@ -6,6 +6,7 @@ import { useLoader } from '@react-three/fiber';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader';
 import * as THREE from 'three';
+import { SlotPlacementSystem } from './SlotPlacementSystem';
 
 type SceneComponent = {
   id: string;
@@ -18,7 +19,40 @@ type SceneComponent = {
   center?: any;
   position: [number, number, number];
   rotation?: [number, number, number];
+  processing_status?: string;
+  processing_error?: string;
 };
+
+// Drop handler component that exposes the camera and gl to the parent via a callback
+// This allows the parent to use raycasting for accurate drop positioning
+function DropHandler({ 
+  onReady 
+}: { 
+  onReady?: (camera: THREE.Camera, gl: THREE.WebGLRenderer) => void;
+}) {
+  const { camera, gl } = useThree();
+
+  useEffect(() => {
+    if (onReady && camera && gl) {
+      onReady(camera, gl);
+    }
+  }, [camera, gl, onReady]);
+  
+  // Also update on every frame to ensure camera ref is always current
+  useEffect(() => {
+    const updateRefs = () => {
+      if (onReady && camera && gl) {
+        onReady(camera, gl);
+      }
+    };
+    
+    // Update refs periodically to catch camera movements
+    const interval = setInterval(updateRefs, 100);
+    return () => clearInterval(interval);
+  }, [camera, gl, onReady]);
+
+  return null;
+}
 
 // Camera controller component to automatically fit camera to scene
 function CameraController({ components }: { components: SceneComponent[] }) {
@@ -56,24 +90,33 @@ function CameraController({ components }: { components: SceneComponent[] }) {
     const size = sceneBox.getSize(new THREE.Vector3());
     const maxDim = Math.max(size.x, size.y, size.z);
     
-    // Calculate camera distance to fit the scene
+    // Calculate camera distance to fit the scene with a reasonable margin
     const fov = (camera as THREE.PerspectiveCamera).fov * (Math.PI / 180);
-    const cameraDistance = maxDim / (2 * Math.tan(fov / 2));
+    // Use a factor to ensure the scene fits comfortably in view
+    const fitFactor = 1.5; // Add 50% margin
+    const cameraDistance = (maxDim * fitFactor) / (2 * Math.tan(fov / 2));
+    
+    // Clamp camera distance to reasonable bounds (prevent too far or too close)
+    // Ensure minimum distance is reasonable and maximum doesn't go too far
+    const minDistance = Math.max(maxDim * 0.5, 10);
+    const maxDistance = Math.min(maxDim * 5, 500); // Reduced from 1000 to prevent going too far
+    const clampedDistance = Math.max(minDistance, Math.min(maxDistance, cameraDistance));
+    
+    // Additional safety check: if distance is too large, use a more conservative value
+    if (clampedDistance > 200) {
+      console.warn('Camera distance too large, using conservative value');
+      const conservativeDistance = Math.min(maxDim * 2, 200);
+      return; // Don't move camera if it would be too far
+    }
     
     // Position camera to look at the center of the scene from a good angle
+    // Use a diagonal angle for better 3D view
+    const angle = Math.PI / 4; // 45 degrees
     const newPosition = new THREE.Vector3(
-      center.x + cameraDistance * 1.8,
-      center.y + cameraDistance * 1.2,
-      center.z + cameraDistance * 1.8
+      center.x + clampedDistance * Math.cos(angle),
+      center.y + clampedDistance * Math.sin(angle) * 0.7, // Slightly lower angle
+      center.z + clampedDistance * Math.cos(angle)
     );
-    
-    console.log('CameraController: Fitting camera to scene:', {
-      center: center.toArray(),
-      size: size.toArray(),
-      maxDim,
-      cameraDistance,
-      newPosition: newPosition.toArray()
-    });
     
     // Set camera position and target
     camera.position.copy(newPosition);
@@ -91,6 +134,30 @@ function CameraController({ components }: { components: SceneComponent[] }) {
   // Track component IDs to detect when components are added/removed (not just updated)
   const componentIdsRef = useRef<string>('');
   
+  // Track if this is the initial load
+  const isInitialLoadRef = useRef(true);
+  
+  // Track if user has manually interacted with camera (to prevent auto-zoom after interaction)
+  const hasUserInteractedRef = useRef(false);
+  const lastCameraPositionRef = useRef<THREE.Vector3 | null>(null);
+  
+  // Monitor camera position to detect user interaction
+  useEffect(() => {
+    const checkCameraMovement = () => {
+      if (lastCameraPositionRef.current) {
+        const distance = camera.position.distanceTo(lastCameraPositionRef.current);
+        // If camera moved more than a small threshold, user likely interacted
+        if (distance > 1) {
+          hasUserInteractedRef.current = true;
+        }
+      }
+      lastCameraPositionRef.current = camera.position.clone();
+    };
+    
+    const interval = setInterval(checkCameraMovement, 200);
+    return () => clearInterval(interval);
+  }, [camera]);
+  
   // Auto-fit camera only when components are added/removed, not when dimensions change
   useEffect(() => {
     // Create a string of component IDs to detect actual additions/removals
@@ -100,13 +167,38 @@ function CameraController({ components }: { components: SceneComponent[] }) {
     // Not if only bounding boxes or other properties changed
     if (currentIds !== componentIdsRef.current) {
       componentIdsRef.current = currentIds;
-      const timeoutId = setTimeout(() => {
-        fitCameraToScene();
-      }, 100); // Small delay to ensure models are loaded
       
-      return () => clearTimeout(timeoutId);
+      if (components.length > 0 && !hasUserInteractedRef.current) {
+        // Skip auto-fit on initial load to prevent blank screen
+        // Only auto-fit when new components are added (not on initial page load)
+        if (isInitialLoadRef.current) {
+          isInitialLoadRef.current = false;
+          return; // Don't auto-fit on initial load
+        }
+        
+        // For subsequent additions, fit after a short delay
+        const delay = 300;
+        
+        const timeoutId = setTimeout(() => {
+          // Only auto-fit if user hasn't manually moved the camera
+          // Double-check that components still exist and user hasn't interacted
+          if (!hasUserInteractedRef.current && components.length > 0) {
+            try {
+              fitCameraToScene();
+              // Update last position after auto-fit
+              lastCameraPositionRef.current = camera.position.clone();
+            } catch (error) {
+              console.error('Error fitting camera to scene:', error);
+            }
+          }
+        }, delay);
+        
+        return () => {
+          clearTimeout(timeoutId);
+        };
+      }
     }
-  }, [components, fitCameraToScene]);
+  }, [components, fitCameraToScene, camera]);
   
   // Expose fit function globally for manual triggering
   useEffect(() => {
@@ -130,49 +222,53 @@ interface SceneProps {
 }
 
 // Component to render GLB models
-function GLBModelContent({ url, position, rotation, selected, onSelect, targetSize }: { 
+function GLBModelContent({ url, position, rotation, selected, onSelect, targetSize, onLoadError }: { 
   url: string; 
   position: [number, number, number]; 
   rotation?: [number, number, number];
   selected?: boolean;
   onSelect?: () => void;
   targetSize?: [number, number, number];
+  onLoadError?: () => void;
 }) {
-  console.log(`GLBModelContent: Loading GLB from ${url}, selected=${selected}, targetSize=${targetSize}`);
-  
   // useGLTF throws a promise during loading (handled by Suspense)
   // Don't wrap in try-catch - let Suspense handle the promise
   const { scene } = useGLTF(url);
   
   if (!scene) {
-    console.error(`GLBModelContent: Scene is null for ${url}`);
+    onLoadError?.();
     return null;
   }
-  
-  console.log(`GLBModelContent: Successfully loaded GLB from ${url}`);
   
   // Clone scene and set up reactive highlighting
   const clonedScene = useMemo(() => scene.clone(), [scene]);
   
   // Store original size to prevent cumulative scaling
   const originalSizeRef = useRef<THREE.Vector3 | null>(null);
+  const hasInitializedRef = useRef(false);
+  const lastTargetSizeRef = useRef<string>('');
   
-  // Initialize original size on first load
+  // Global scale factor: converts mm to scene units (for relative sizing)
+  // This ensures all components maintain their relative sizes
+  // 1mm = 0.01 scene units, so 1000mm = 10 scene units, 100mm = 1 scene unit
+  // This maintains the 10:1 ratio while keeping everything visible
+  const GLOBAL_SCALE_FACTOR = 0.01; // Convert mm to scene units (1mm = 0.01 scene units)
+  
+  // Initialize original size ONCE on first load
   useEffect(() => {
-    if (!originalSizeRef.current) {
+    if (hasInitializedRef.current || !clonedScene) return;
+    
+    try {
       // Reset scale to 1,1,1 before measuring to ensure we get the true original size
       clonedScene.scale.set(1, 1, 1);
       const box = new THREE.Box3().setFromObject(clonedScene);
       const size = new THREE.Vector3();
       box.getSize(size);
       originalSizeRef.current = size.clone();
-      console.log(`GLBModelContent: Stored original size:`, size);
       
-      // Log a warning if the original size seems to be in meters (very small values)
-      const maxDim = Math.max(size.x, size.y, size.z);
-      if (maxDim < 1) {
-        console.warn(`⚠️ GLBModelContent: Original model size is very small (${maxDim.toFixed(3)} units). Model might be in meters. Expected mm.`);
-      }
+      hasInitializedRef.current = true;
+    } catch (e) {
+      // Silently handle initialization errors
     }
   }, [clonedScene]);
   
@@ -196,108 +292,70 @@ function GLBModelContent({ url, position, rotation, selected, onSelect, targetSi
     });
   }, [selected, clonedScene]);
 
-  // Scale to match desired bounding-box size if provided
+  // Track if model has been centered (only center once)
+  const hasCenteredRef = useRef(false);
+  
+  // Scale to match desired bounding-box size (maintains relative sizing)
   useEffect(() => {
-    if (!originalSizeRef.current) return;
+    if (!hasInitializedRef.current || !originalSizeRef.current) return;
+    
+    // Create a string key for targetSize to detect actual changes
+    const targetSizeKey = targetSize ? `${targetSize[0]},${targetSize[1]},${targetSize[2]}` : 'none';
+    
+    // Skip if targetSize hasn't actually changed and model is already centered
+    if (targetSizeKey === lastTargetSizeRef.current && hasCenteredRef.current) {
+      return;
+    }
+    
+    lastTargetSizeRef.current = targetSizeKey;
     
     try {
-      // Reset scale to 1,1,1 before applying new scale to prevent cumulative scaling
-      clonedScene.scale.set(1, 1, 1);
-      
-      // Always scale relative to the original unscaled size, not the current size
       const originalSize = originalSizeRef.current;
       
+      let scaleX = GLOBAL_SCALE_FACTOR;
+      let scaleY = GLOBAL_SCALE_FACTOR;
+      let scaleZ = GLOBAL_SCALE_FACTOR;
+      
       if (targetSize) {
-        console.log(`GLBModelContent: Scaling to target size:`, targetSize);
-        console.log(`GLBModelContent: Original size:`, originalSizeRef.current);
-        
-        // Add validation for reasonable target sizes (in mm)
+        // Target dimensions are in mm
         const [targetX, targetY, targetZ] = targetSize;
-        if (targetX > 10000 || targetY > 10000 || targetZ > 10000 || 
-            targetX <= 0 || targetY <= 0 || targetZ <= 0 ||
-            !isFinite(targetX) || !isFinite(targetY) || !isFinite(targetZ)) {
-          console.error('⚠️ Invalid target size detected:', targetSize);
-          return; // Don't scale to unreasonable sizes
+        
+        // Validate target sizes
+        if (targetX > 0 && targetY > 0 && targetZ > 0 &&
+            targetX < 10000 && targetY < 10000 && targetZ < 10000 &&
+            isFinite(targetX) && isFinite(targetY) && isFinite(targetZ)) {
+          
+          // Calculate scale factors to match target dimensions
+          // Scale = (target dimension in mm * global scale) / original size
+          // This maintains relative sizing: a 1000mm component will be 10x larger than a 100mm component
+          scaleX = (targetX * GLOBAL_SCALE_FACTOR) / originalSize.x;
+          scaleY = (targetY * GLOBAL_SCALE_FACTOR) / originalSize.y;
+          scaleZ = (targetZ * GLOBAL_SCALE_FACTOR) / originalSize.z;
+          
+          // Clamp scales to reasonable bounds
+          scaleX = Math.max(0.0001, Math.min(10, scaleX));
+          scaleY = Math.max(0.0001, Math.min(10, scaleY));
+          scaleZ = Math.max(0.0001, Math.min(10, scaleZ));
         }
-        
-        // Calculate scale factors for each dimension
-        // Ensure originalSize is valid
-        if (originalSize.x <= 0 || originalSize.y <= 0 || originalSize.z <= 0 ||
-            !isFinite(originalSize.x) || !isFinite(originalSize.y) || !isFinite(originalSize.z)) {
-          console.error('⚠️ Invalid original size:', originalSize);
-          return;
-        }
-        
-        // Detect if original model is likely in meters (very small values)
-        // If original size is < 1 unit and target is > 100, assume original is in meters
-        const maxOriginalDim = Math.max(originalSize.x, originalSize.y, originalSize.z);
-        const maxTargetDim = Math.max(targetX, targetY, targetZ);
-        const likelyInMeters = maxOriginalDim < 1 && maxTargetDim > 100;
-        
-        // If model is in meters, convert original size to mm (multiply by 1000)
-        const adjustedOriginalSize = likelyInMeters 
-          ? new THREE.Vector3(originalSize.x * 1000, originalSize.y * 1000, originalSize.z * 1000)
-          : originalSize;
-        
-        if (likelyInMeters) {
-          console.warn(`⚠️ GLBModelContent: Detected model in meters, converting to mm. Original: ${maxOriginalDim.toFixed(3)}m, Target: ${maxTargetDim}mm`);
-        }
-        
-        const scaleX = targetX / adjustedOriginalSize.x;
-        const scaleY = targetY / adjustedOriginalSize.y;
-        const scaleZ = targetZ / adjustedOriginalSize.z;
-        
-        // Validate scale factors are reasonable (prevent huge scales)
-        if (!isFinite(scaleX) || !isFinite(scaleY) || !isFinite(scaleZ) ||
-            scaleX > 10 || scaleY > 10 || scaleZ > 10 ||
-            scaleX < 0.01 || scaleY < 0.01 || scaleZ < 0.01) {
-          console.error('⚠️ Invalid scale factors calculated:', { 
-            scaleX, scaleY, scaleZ, 
-            targetSize, 
-            originalSize, 
-            adjustedOriginalSize,
-            likelyInMeters 
-          });
-          return;
-        }
-        
-        // Apply uniform scaling based on the largest dimension to maintain proportions
-        const maxScale = Math.max(scaleX, scaleY, scaleZ);
-        
-        console.log(`GLBModelContent: Applying scale:`, {
-          scale: [maxScale, maxScale, maxScale],
-          targetSize,
-          originalSize,
-          scaleFactors: { scaleX, scaleY, scaleZ }
-        });
-        clonedScene.scale.set(maxScale, maxScale, maxScale);
       } else {
-        // No target size provided - apply reasonable default scaling
-        // This prevents models from being too large when no dimensions are specified
-        const maxDimension = Math.max(originalSize.x, originalSize.y, originalSize.z);
-        
-        // If the model is very large in its original units, scale it down
-        if (maxDimension > 1000) {
-          const defaultScale = 1000 / maxDimension; // Scale largest dimension to ~1000 units
-          console.log(`GLBModelContent: Applying default scale for large model:`, defaultScale);
-          clonedScene.scale.set(defaultScale, defaultScale, defaultScale);
-        } else if (maxDimension < 10) {
-          // If the model is very small, scale it up to be visible
-          const defaultScale = 100 / maxDimension; // Scale to ~100 units
-          console.log(`GLBModelContent: Applying default scale for small model:`, defaultScale);
-          clonedScene.scale.set(defaultScale, defaultScale, defaultScale);
-        }
+        // No target size: use global scale factor to maintain relative sizing
+        // This ensures components without bounding boxes still scale consistently
+        scaleX = scaleY = scaleZ = GLOBAL_SCALE_FACTOR;
       }
       
-      // Recenter at origin after scaling
-      const scaledBox = new THREE.Box3().setFromObject(clonedScene);
-      const scaledCenter = new THREE.Vector3();
-      scaledBox.getCenter(scaledCenter);
-      clonedScene.position.sub(scaledCenter);
+      // Apply scaling
+      clonedScene.scale.set(scaleX, scaleY, scaleZ);
       
-      console.log(`GLBModelContent: Scaling applied successfully`);
+      // Recenter at origin only once after initial scaling
+      if (!hasCenteredRef.current) {
+        const scaledBox = new THREE.Box3().setFromObject(clonedScene);
+        const scaledCenter = new THREE.Vector3();
+        scaledBox.getCenter(scaledCenter);
+        clonedScene.position.sub(scaledCenter);
+        hasCenteredRef.current = true;
+      }
     } catch (e) {
-      console.warn('Failed to scale GLB to target size', e);
+      // Silently handle scaling errors
     }
   }, [clonedScene, targetSize?.[0], targetSize?.[1], targetSize?.[2]]);
   
@@ -306,7 +364,6 @@ function GLBModelContent({ url, position, rotation, selected, onSelect, targetSi
       object={clonedScene}
       onClick={(e: any) => {
         e.stopPropagation();
-        console.log('🎯 GLB model clicked, calling onSelect');
         onSelect?.();
       }}
       onPointerOver={(e: any) => {
@@ -328,6 +385,26 @@ function GLBModel(props: {
   onSelect?: () => void;
   targetSize?: [number, number, number];
 }) {
+  const [loadError, setLoadError] = useState(false);
+  
+  // Reset error state when URL changes
+  useEffect(() => {
+    setLoadError(false);
+  }, [props.url]);
+  
+  if (loadError) {
+    // If GLB fails to load, show placeholder instead of nothing
+    return (
+      <ComponentPlaceholder
+        position={props.position}
+        bounding_box={undefined}
+        category=""
+        selected={props.selected}
+        onSelect={props.onSelect}
+      />
+    );
+  }
+  
   return (
     <Suspense 
       fallback={
@@ -337,10 +414,11 @@ function GLBModel(props: {
         </mesh>
       }
     >
-      <GLBModelContent {...props} />
+      <GLBModelContent {...props} onLoadError={() => setLoadError(true)} />
     </Suspense>
   );
 }
+
 
 // Fallback placeholder for components without GLB
 function ComponentPlaceholder({ 
@@ -348,19 +426,29 @@ function ComponentPlaceholder({
   bounding_box, 
   category, 
   selected, 
-  onSelect 
+  onSelect,
+  processing_status,
+  processing_error
 }: { 
   position: [number, number, number]; 
   bounding_box?: any;
   category: string;
   selected?: boolean;
   onSelect?: () => void;
+  processing_status?: string;
+  processing_error?: string;
 }) {
   const size = bounding_box ? [
     (bounding_box.max?.[0] || 1) - (bounding_box.min?.[0] || 0),
     (bounding_box.max?.[1] || 1) - (bounding_box.min?.[1] || 0),
     (bounding_box.max?.[2] || 1) - (bounding_box.min?.[2] || 0),
   ] : [1, 1, 1];
+
+  // Use red color if processing failed
+  // Check both processing_status and processing_error (some components might have error but status not set to 'failed')
+  const isFailed = processing_status === 'failed' || (processing_error && processing_error.length > 0);
+  const defaultColor = isFailed ? "#ef4444" : "#666666"; // Red for failed, gray for normal
+  const selectedColor = isFailed ? "#dc2626" : "#00b4d8"; // Darker red if failed and selected
 
   return (
     <mesh
@@ -379,12 +467,12 @@ function ComponentPlaceholder({
     >
       <boxGeometry args={size as [number, number, number]} />
       <meshStandardMaterial 
-        color={selected ? "#00b4d8" : "#666666"} 
+        color={selected ? selectedColor : defaultColor} 
         metalness={0.6} 
         roughness={0.4}
         transparent
         opacity={selected ? 0.9 : 0.7}
-        emissive={selected ? new THREE.Color(0x00b4d8) : new THREE.Color(0x000000)}
+        emissive={selected ? new THREE.Color(isFailed ? 0xdc2626 : 0x00b4d8) : new THREE.Color(0x000000)}
         emissiveIntensity={selected ? 0.3 : 0}
       />
     </mesh>
@@ -503,7 +591,6 @@ function OBJModelContent({ url, position, rotation, selected, onSelect }: {
         object={obj} 
         onClick={(e: any) => {
           e.stopPropagation();
-          console.log('🎯 OBJ model clicked');
           onSelect?.();
         }}
         onPointerOver={(e: any) => {
@@ -576,8 +663,6 @@ function TransformControlWrapper({
         // Get position and rotation from the group being controlled
         const pos = [obj.position.x, obj.position.y, obj.position.z] as [number, number, number];
         const rot = [obj.rotation.x, obj.rotation.y, obj.rotation.z] as [number, number, number];
-        
-        console.log(`🔄 Transform changed for ${component.name}: pos=[${pos.map(x => x.toFixed(2)).join(', ')}], rot=[${rot.map(x => x.toFixed(2)).join(', ')}]`);
         onUpdate(pos, rot);
       }}
     >
@@ -602,15 +687,6 @@ export const Scene = ({
   activeTool = 'select'
 }: SceneProps) => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  
-  // Debug: Log when components change
-  useEffect(() => {
-    console.log(`🎬 Scene: Components updated. Count: ${components.length}`);
-    components.forEach(comp => {
-      console.log(`  📦 ${comp.name} (${comp.id}): GLB=${comp.glb_url ? 'YES' : 'NO'}, Position=[${comp.position.join(', ')}]`);
-    });
-  }, [components]);
-  
   const [dragOver, setDragOver] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const [snap, setSnap] = useState({ translate: 0.5, rotate: Math.PI / 12, scale: 0.1 });
@@ -620,18 +696,19 @@ export const Scene = ({
     activeTool === 'move' ? 'translate' :
     activeTool === 'rotate' ? 'rotate' :
     activeTool === 'scale' ? 'scale' : 'translate';
-  
-  // Log when transform mode changes for debugging
-  useEffect(() => {
-    console.log(`🔧 Transform mode changed to: ${transformMode} (activeTool: ${activeTool})`);
-  }, [transformMode, activeTool]);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    setDragOver(true);
-    e.dataTransfer.dropEffect = 'copy';
-  }, []);
+    if (!dragOver) {
+      console.log('Drag over detected, setting dragOver to true');
+      setDragOver(true);
+    }
+    // Set drop effect to show it's a valid drop target
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = 'copy';
+    }
+  }, [dragOver]);
 
   const handleDragLeave = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -639,54 +716,119 @@ export const Scene = ({
     setDragOver(false);
   }, []);
 
+  // Store camera and gl references for raycasting
+  const cameraRef = useRef<THREE.Camera | null>(null);
+  const glRef = useRef<THREE.WebGLRenderer | null>(null);
+  const raycasterRef = useRef(new THREE.Raycaster());
+
   const handleDrop = useCallback((e: React.DragEvent) => {
+    console.log('🎯 Drop event received in handleDrop!');
+    console.log('🎯 Event target:', e.target);
+    console.log('🎯 Event currentTarget:', e.currentTarget);
     e.preventDefault();
     e.stopPropagation();
     setDragOver(false);
 
     try {
-      const data = e.dataTransfer.getData('application/json');
+      // Try application/json first
+      let data = e.dataTransfer.getData('application/json');
+      
+      // Fallback to text/plain if application/json is empty
       if (!data) {
-        console.warn('⚠️ No drag data found');
+        console.log('No application/json data, trying text/plain...');
+        data = e.dataTransfer.getData('text/plain');
+      }
+      
+      if (!data) {
+        console.warn('No drag data found in either format');
+        console.log('Available types:', e.dataTransfer.types);
         return;
       }
 
       const component = JSON.parse(data);
-      console.log('🎯 Component dropped:', component);
+      console.log('Dropped component:', component);
       
-      // Calculate drop position (screen-to-world approximate mapping to ground plane)
+      // Validate required fields
+      if (!component.id && !component.componentId) {
+        console.error('Component missing ID:', component);
+        return;
+      }
+
+      // Calculate drop position using raycasting if camera is available
       if (containerRef.current && onAddComponent) {
         const rect = containerRef.current.getBoundingClientRect();
-        const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-        const ndcY = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
-        const x = ndcX * 10;
-        const z = -ndcY * 10;
-        const y = 0;
+        
+        let position: [number, number, number];
+        
+        // Use raycasting if camera is available
+        if (cameraRef.current && glRef.current) {
+          // Ensure camera projection matrix is up to date
+          if (cameraRef.current instanceof THREE.PerspectiveCamera) {
+            cameraRef.current.updateProjectionMatrix();
+          }
+          
+          // Convert screen coordinates to normalized device coordinates
+          const mouse = new THREE.Vector2();
+          mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+          mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+
+          console.log('Raycasting with mouse:', mouse, 'camera position:', cameraRef.current.position, 'camera FOV:', (cameraRef.current as THREE.PerspectiveCamera).fov);
+
+          // Raycast against ground plane (y = 0)
+          raycasterRef.current.setFromCamera(mouse, cameraRef.current);
+          const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+          const intersectionPoint = new THREE.Vector3();
+          
+          const intersects = raycasterRef.current.ray.intersectPlane(groundPlane, intersectionPoint);
+
+          if (intersects && intersectionPoint && !isNaN(intersectionPoint.x) && !isNaN(intersectionPoint.y) && !isNaN(intersectionPoint.z)) {
+            // Ensure Y is exactly 0 (ground plane)
+            position = [intersectionPoint.x, 0, intersectionPoint.z];
+            console.log('Using raycast position:', position);
+          } else {
+            // Fallback to simple calculation
+            const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+            const ndcY = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
+            position = [ndcX * 10, 0, -ndcY * 10];
+            console.log('Using fallback position (raycast failed):', position, 'intersects:', intersects);
+          }
+        } else {
+          // Fallback to simple calculation if camera not available
+          const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+          const ndcY = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
+          position = [ndcX * 10, 0, -ndcY * 10];
+          console.log('Using simple position (camera not ready):', position, {
+            hasCamera: !!cameraRef.current,
+            hasGL: !!glRef.current
+          });
+        }
 
         const componentToAdd = {
           componentId: component.id || component.componentId,
-          name: component.name,
-          category: component.category,
+          name: component.name || 'Unnamed Component',
+          category: component.category || 'unknown',
           glb_url: component.glb_url || null,
           original_url: component.original_url || null,
-          bounding_box: component.bounding_box,
-          center: component.center,
-          position: [x, y, z] as [number, number, number],
+          bounding_box: component.bounding_box || null,
+          center: component.center || [0, 0, 0],
+          position,
           rotation: [0, 0, 0] as [number, number, number],
         };
         
-        console.log('🎯 Calling onAddComponent with:', componentToAdd);
+        console.log('Adding component to scene:', componentToAdd);
         onAddComponent(componentToAdd);
       } else {
-        console.error('❌ Missing containerRef or onAddComponent');
+        console.warn('Container ref or onAddComponent not available', {
+          hasContainerRef: !!containerRef.current,
+          hasOnAddComponent: !!onAddComponent
+        });
       }
     } catch (err) {
-      console.error('❌ Error handling drop:', err);
+      console.error('Error handling drop:', err);
     }
   }, [onAddComponent]);
 
   const handleSelect = (id: string) => {
-    console.log(`🎯 Selecting component: ${id}, previous: ${selectedId}`);
     setSelectedId(id);
     onSelectComponent(id);
   };
@@ -704,6 +846,7 @@ export const Scene = ({
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
+      style={{ position: 'relative' }}
     >
       {/* Camera fit button */}
       <button
@@ -719,13 +862,22 @@ export const Scene = ({
       </button>
       <Canvas 
         shadows
+        style={{ display: 'block', width: '100%', height: '100%', pointerEvents: dragOver ? 'none' : 'auto' }}
+        onCreated={({ camera, gl }) => {
+          // Update camera and gl refs when Canvas is created/updated
+          cameraRef.current = camera;
+          glRef.current = gl;
+        }}
         onPointerMissed={(e) => {
           // This fires when clicking on empty space (not on any 3D object)
           if (selectedId && activeTool === 'select') {
-            console.log('🎯 Clicked on empty space, deselecting');
             setSelectedId(null);
             onSelectComponent('');
           }
+        }}
+        onDragOver={(e) => {
+          // Allow drag over on canvas - let it bubble to container
+          e.preventDefault();
         }}
       >
         <PerspectiveCamera makeDefault position={cameraPosition} fov={50} />
@@ -736,6 +888,14 @@ export const Scene = ({
           enableRotate={activeTool === 'select'}
           minDistance={5}
           maxDistance={200}  // Increased max distance for better overview
+        />
+        
+        {/* Drop handler for accurate 3D positioning using raycasting */}
+        <DropHandler 
+          onReady={(camera, gl) => {
+            cameraRef.current = camera;
+            glRef.current = gl;
+          }}
         />
         
         {/* Auto-fit camera to all components */}
@@ -779,10 +939,12 @@ export const Scene = ({
           <shadowMaterial transparent opacity={0.3} />
         </mesh>
 
+        {/* Slot-based placement system */}
+        <SlotPlacementSystem />
+
         {/* Render dynamic components from backend */}
         {components.length > 0 && (
           <>
-            {console.log(`🎬 Starting to render ${components.length} components`)}
             {components.map((comp) => {
               const key = comp.id;
               const originalUrl = comp.original_url;
@@ -795,11 +957,8 @@ export const Scene = ({
               const isOBJ = fileExt === 'obj';
               const isSTEP = fileExt === 'step' || fileExt === 'stp';
 
-              console.log(`🎨 Rendering component ${comp.name} (${comp.id}): GLB=${glbUrl}, Original=${originalUrl}, Ext=${fileExt}, Position=${comp.position}`);
-
           let content;
           if (shouldUseGLB) {
-            console.log(`✅ Using GLB for ${comp.name}: ${glbUrl}`);
             // GLBModel will be positioned by the wrapping group, so pass [0,0,0]
             // Compute desired size from bounding_box if available
             // Convert from mm to scene units (1 scene unit = 1mm, so no conversion needed)
@@ -810,10 +969,8 @@ export const Scene = ({
               const length = Math.abs((comp.bounding_box.max?.[2] || 0) - (comp.bounding_box.min?.[2] || 0));
               
               // Validate dimensions are reasonable (in mm)
-              if (width > 10000 || height > 10000 || length > 10000) {
-                console.error('⚠️ Suspicious bounding box dimensions detected:', { width, height, length });
-                return undefined; // Don't scale to unreasonable sizes
-              }
+              // For STEP files, dimensions can be large but should be reasonable
+              // Allow up to 5000mm (5 meters) for large components
               
               // Ensure minimum size of 1mm
               return [
@@ -822,13 +979,6 @@ export const Scene = ({
                 Math.max(length, 1)
               ];
             })() : undefined;
-            
-            console.log(`📏 Target size calculation for ${comp.name}:`, {
-              bounding_box: comp.bounding_box,
-              targetSize,
-              max: comp.bounding_box?.max,
-              min: comp.bounding_box?.min
-            });
 
             content = (
               <GLBModel
@@ -862,7 +1012,6 @@ export const Scene = ({
             );
           } else if (originalUrl && isSTEP) {
             // STEP files need conversion - if no GLB, show placeholder with helpful message
-            console.warn(`STEP file not converted to GLB yet: ${originalUrl}. GLB URL: ${glbUrl}. Please wait for processing or check backend logs.`);
             content = (
               <ComponentPlaceholder
                 position={comp.position}
@@ -870,11 +1019,13 @@ export const Scene = ({
                 category={comp.category}
                 selected={selectedId === comp.id}
                 onSelect={() => handleSelect(comp.id)}
+                processing_status={comp.processing_status}
+                processing_error={comp.processing_error}
               />
             );
           } else {
             // Fallback placeholder - show info about what's missing
-            console.warn(`Component ${comp.name} (${comp.id}): No GLB (${glbUrl}), original: ${originalUrl}, ext: ${fileExt}`);
+            // This includes components without GLB (failed processing, missing files, etc.)
             content = (
               <ComponentPlaceholder
                 position={comp.position}
@@ -882,6 +1033,8 @@ export const Scene = ({
                 category={comp.category}
                 selected={selectedId === comp.id}
                 onSelect={() => handleSelect(comp.id)}
+                processing_status={comp.processing_status}
+                processing_error={comp.processing_error}
               />
             );
           }
@@ -889,7 +1042,6 @@ export const Scene = ({
           // Wrap in group with position/rotation for TransformControls
           // If no content, show placeholder
           if (!content) {
-            console.warn(`No content to render for component ${comp.name} (${comp.id}), showing placeholder`);
             content = (
               <ComponentPlaceholder
                 position={[0, 0, 0]}

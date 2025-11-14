@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
 import { Toolbar } from '@/components/Toolbar';
 import { ComponentLibrary } from '@/components/ComponentLibrary';
 import { PropertiesPanel } from '@/components/PropertiesPanel';
@@ -6,8 +7,12 @@ import { BOMPanel } from '@/components/BOMPanel';
 import { Scene } from '@/components/3d/Scene';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { ChevronLeft, ChevronRight, Lock } from 'lucide-react';
 import { ConveyorComponent, BOMItem } from '@/types/conveyor';
+import { useAuth } from '@/hooks/useAuth';
+import { usePlacementStore } from '@/state/store';
+import { getOrFetchCsrfToken } from '@/lib/api';
 
 type SceneComponent = {
   id: string;
@@ -20,9 +25,17 @@ type SceneComponent = {
   center?: any;
   position: [number, number, number];
   rotation?: [number, number, number];
+  processing_status?: string;
+  processing_error?: string;
 };
 
-const Index = () => {
+const Builder = () => {
+  const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const { isAuthenticated } = useAuth();
+  const isReadonly = searchParams.get('readonly') === '1' || id === 'demo';
+  const isDemo = id === 'demo';
   const [activeTool, setActiveTool] = useState('select');
   const [selectedComponent, setSelectedComponent] = useState<ConveyorComponent | null>(null);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
@@ -30,7 +43,9 @@ const Index = () => {
   const [viewMode, setViewMode] = useState<'focused' | 'shopfloor'>('focused');
   const [showGrid, setShowGrid] = useState<boolean>(true);
   const [sceneComponents, setSceneComponents] = useState<SceneComponent[]>([]);
-  const [currentProjectId, setCurrentProjectId] = useState<number | null>(null);
+  const [currentProjectId, setCurrentProjectId] = useState<number | null>(
+    id && id !== 'demo' ? parseInt(id, 10) : null
+  );
   const hasLoadedRef = useRef(false); // Track if initial load has happened
   const isLoadingRef = useRef(false); // Prevent concurrent loads
   const isAddingComponentRef = useRef(false); // Prevent concurrent component additions
@@ -54,6 +69,12 @@ const Index = () => {
   useEffect(() => {
     if (isUndoRedoRef.current || !hasLoadedRef.current) {
       return; // Skip during undo/redo or before initial load
+    }
+    
+    // Don't save to history if components array is empty (might clear the scene)
+    if (sceneComponents.length === 0) {
+      console.log('⏭️ Skipping history save - components array is empty');
+      return;
     }
     
     // Only save to history if components actually changed
@@ -171,18 +192,44 @@ const Index = () => {
           console.log('Unique items after position deduplication:', uniqueItems.length);
           
           // Step 3: Map to SceneComponent format
-          const loadedComponents: SceneComponent[] = uniqueItems.map((item: any) => ({
-            id: `comp-${item.id}`,
-            componentId: item.component.id,
-            name: item.custom_name || item.component.name,
-            category: item.component.category_label || item.component.category || '',
-            glb_url: item.component.glb_url || item.component.glb_file_url,
-            original_url: item.component.original_url || item.component.original_file_url,
-            bounding_box: item.component.bounding_box,
-            center: item.component.center,
-            position: [item.position_x || 0, item.position_y || 0, item.position_z || 0],
-            rotation: [item.rotation_x || 0, item.rotation_y || 0, item.rotation_z || 0] as [number, number, number],
-          }));
+          const loadedComponents: SceneComponent[] = uniqueItems.map((item: any) => {
+            // Use saved bounding_box from metadata if available, otherwise use component's default
+            // The metadata.bounding_box contains the actual saved dimensions
+            let boundingBox = item.metadata?.bounding_box || item.component.bounding_box;
+            
+            // If we have scale values, reconstruct the bounding box from them
+            // This ensures dimensions are preserved even if bounding_box wasn't saved correctly
+            if (item.scale_x && item.scale_y && item.scale_z && (!boundingBox || !boundingBox.min || !boundingBox.max)) {
+              const center = item.metadata?.center || item.component.center || [0, 0, 0];
+              boundingBox = {
+                min: [
+                  center[0] - item.scale_x / 2,
+                  center[1] - item.scale_y / 2,
+                  center[2] - item.scale_z / 2,
+                ],
+                max: [
+                  center[0] + item.scale_x / 2,
+                  center[1] + item.scale_y / 2,
+                  center[2] + item.scale_z / 2,
+                ],
+              };
+            }
+            
+            return {
+              id: `comp-${item.id}`,
+              componentId: item.component.id,
+              name: item.custom_name || item.component.name,
+              category: item.component.category_label || item.component.category || '',
+              glb_url: item.component.glb_url || item.component.glb_file_url,
+              original_url: item.component.original_url || item.component.original_file_url,
+              bounding_box: boundingBox,
+              center: item.metadata?.center || item.component.center,
+              position: [item.position_x || 0, item.position_y || 0, item.position_z || 0],
+              rotation: [item.rotation_x || 0, item.rotation_y || 0, item.rotation_z || 0] as [number, number, number],
+              processing_status: item.component.processing_status,
+              processing_error: item.component.processing_error,
+            };
+          });
           
           // Step 4: Final deduplication by frontend ID (shouldn't be needed, but safety check)
           const finalUniqueComponents: SceneComponent[] = [];
@@ -262,9 +309,28 @@ const Index = () => {
     // Find component in scene
     const comp = sceneComponents.find(c => c.id === id);
     if (comp) {
-      // If component is already selected and we're just updating, preserve existing dimensions
+      // If component is already selected, preserve existing dimensions
       // to avoid recalculating from bounding box which might be wrong
       const existingDimensions = selectedComponent?.id === comp.id ? selectedComponent.dimensions : undefined;
+      
+      // Calculate dimensions from bounding box if not preserving existing
+      let dimensions = existingDimensions;
+      if (!dimensions && comp.bounding_box) {
+        const width = Math.abs((comp.bounding_box.max?.[0] || 0) - (comp.bounding_box.min?.[0] || 0));
+        const height = Math.abs((comp.bounding_box.max?.[1] || 0) - (comp.bounding_box.min?.[1] || 0));
+        const length = Math.abs((comp.bounding_box.max?.[2] || 0) - (comp.bounding_box.min?.[2] || 0));
+        
+        // Only use calculated dimensions if they're reasonable (not too small)
+        // This prevents using incorrect bounding boxes that might be from the component template
+        if (width > 10 && height > 10 && length > 10) {
+          dimensions = { width, height, length };
+        } else {
+          // Use reasonable defaults if bounding box seems wrong
+          dimensions = { width: 450, height: 300, length: 350 };
+        }
+      } else if (!dimensions) {
+        dimensions = { width: 450, height: 300, length: 350 };
+      }
       
       setSelectedComponent({
         id: comp.id,
@@ -272,15 +338,15 @@ const Index = () => {
         name: comp.name,
         position: comp.position,
         rotation: comp.rotation || [0, 0, 0],
-        dimensions: existingDimensions || (comp.bounding_box ? {
-          width: Math.abs((comp.bounding_box.max?.[0] || 0) - (comp.bounding_box.min?.[0] || 0)),
-          height: Math.abs((comp.bounding_box.max?.[1] || 0) - (comp.bounding_box.min?.[1] || 0)),
-          length: Math.abs((comp.bounding_box.max?.[2] || 0) - (comp.bounding_box.min?.[2] || 0)),
-        } : { width: 1, height: 1, length: 1 }),
+        dimensions: dimensions,
         material: 'default',
         specifications: {},
         cost: 0,
         partNumber: `COMP-${comp.componentId}`,
+        processing_status: comp.processing_status,
+        processing_error: comp.processing_error,
+        glb_url: comp.glb_url,
+        original_url: comp.original_url,
       });
     } else {
       // Component not found, clear selection
@@ -296,8 +362,14 @@ const Index = () => {
     }
     
     console.log('🚀 handleAddComponent called with:', component);
+    console.log('🚀 Drop position:', component.position);
+    console.log('🚀 Bounding box:', component.bounding_box);
     console.log('🚀 currentProjectId:', currentProjectId);
-    console.log('🚀 Stack trace:', new Error().stack);
+    
+    // Store the drop position and bounding_box to preserve them
+    const dropPosition = component.position;
+    const dropBoundingBox = component.bounding_box;
+    const dropCenter = component.center;
     
     isAddingComponentRef.current = true;
     
@@ -374,10 +446,17 @@ const Index = () => {
       };
       console.log('📤 Request body:', requestBody);
       
+      // Get CSRF token
+      const csrfToken = await getOrFetchCsrfToken();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (csrfToken) {
+        headers['X-CSRFToken'] = csrfToken;
+      }
+      
       const response = await fetch(`${API_BASE}/api/projects/${currentProjectId}/add_component/`, {
         method: 'POST',
         credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify(requestBody),
       });
 
@@ -409,6 +488,7 @@ const Index = () => {
       }
       
       // Use the backend response to create the component with correct data
+      // IMPORTANT: Preserve the drop position and bounding_box from the drag operation
       const newComponent: SceneComponent = {
         id: `comp-${assemblyItem.id}`,
         componentId: assemblyItem.component.id,
@@ -416,11 +496,16 @@ const Index = () => {
         category: assemblyItem.component.category_label || assemblyItem.component.category || '',
         glb_url: assemblyItem.component.glb_url || null,
         original_url: assemblyItem.component.original_url || null,
-        bounding_box: assemblyItem.component.bounding_box,
-        center: assemblyItem.component.center,
-        position: [assemblyItem.position_x || 0, assemblyItem.position_y || 0, assemblyItem.position_z || 0],
+        // Preserve bounding_box from drag data (it should have the correct dimensions)
+        bounding_box: dropBoundingBox || assemblyItem.component.bounding_box || null,
+        center: dropCenter || assemblyItem.component.center || [0, 0, 0],
+        // Use the drop position (calculated via raycasting), not the backend position
+        position: dropPosition as [number, number, number],
         rotation: [assemblyItem.rotation_x || 0, assemblyItem.rotation_y || 0, assemblyItem.rotation_z || 0] as [number, number, number],
       };
+      
+      console.log('✅ Component created with drop position:', newComponent.position);
+      console.log('✅ Component bounding_box:', newComponent.bounding_box);
       
       console.log('✅ Created newComponent object:', newComponent);
 
@@ -587,7 +672,10 @@ const Index = () => {
     // Delete from backend
     try {
       const componentId = id.replace('comp-', '');
-      const response = await fetch(`${API_BASE}/api/assembly-items/${componentId}/`, {
+      // Include project_id in query params for better filtering (optional but recommended)
+      const baseUrl = `${API_BASE}/api/assembly-items/${componentId}/`;
+      const url = currentProjectId ? `${baseUrl}?project_id=${currentProjectId}` : baseUrl;
+      const response = await fetch(url, {
         method: 'DELETE',
         credentials: 'include',
       });
@@ -683,9 +771,16 @@ const Index = () => {
         componentIds: payload.assembly_items.map(i => i.id)
       });
       
+      // Get CSRF token
+      const csrfToken = await getOrFetchCsrfToken();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (csrfToken) {
+        headers['X-CSRFToken'] = csrfToken;
+      }
+      
       const response = await fetch(`${API_BASE}/api/projects/${currentProjectId}/save/`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         credentials: 'include',
         body: JSON.stringify(payload)
       });
@@ -761,6 +856,12 @@ const Index = () => {
       return; // Don't auto-save during initial load, undo/redo, or component addition
     }
     
+    // Don't auto-save if components array is empty (might be a loading state)
+    if (sceneComponents.length === 0) {
+      console.log('⏭️ Skipping auto-save - components array is empty');
+      return;
+    }
+    
     triggerAutoSave();
     
     return () => {
@@ -788,6 +889,27 @@ const Index = () => {
 
   return (
     <div className="h-screen flex flex-col bg-background overflow-hidden">
+      {/* Readonly/Demo Banner */}
+      {isReadonly && (
+        <Alert className="m-4 mb-0 border-accent/50 bg-accent/10">
+          <Lock className="h-4 w-4" />
+          <AlertDescription className="flex items-center justify-between">
+            <span>
+              {isDemo ? 'Demo Mode' : 'Read-only Mode'}. Sign in to save your work.
+            </span>
+            {!isAuthenticated && (
+              <Button
+                size="sm"
+                onClick={() => navigate('/login')}
+                className="ml-4 bg-accent text-accent-foreground hover:bg-accent/90"
+              >
+                Sign In
+              </Button>
+            )}
+          </AlertDescription>
+        </Alert>
+      )}
+
       {/* Top Toolbar */}
       <Toolbar 
         onToolSelect={setActiveTool}
@@ -853,19 +975,16 @@ const Index = () => {
                 {rightCollapsed ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
               </Button>
             </div>
-            <Tabs defaultValue="properties" className={`flex-1 flex flex-col ${rightCollapsed ? 'hidden' : ''}`}>
-              <TabsList className="grid w-full grid-cols-2 bg-secondary mx-4 mt-2">
+            <Tabs defaultValue="properties" className={`flex-1 flex flex-col min-h-0 ${rightCollapsed ? 'hidden' : ''}`}>
+              <TabsList className="grid w-full grid-cols-2 bg-secondary mx-4 mt-2 flex-shrink-0">
                 <TabsTrigger value="properties">Properties</TabsTrigger>
                 <TabsTrigger value="bom">BOM</TabsTrigger>
               </TabsList>
-              <TabsContent value="properties" className="flex-1 mt-4 overflow-hidden min-h-0">
+              <TabsContent value="properties" className="flex-1 mt-4 overflow-y-auto custom-scrollbar min-h-0">
                 <PropertiesPanel 
                   selectedComponent={selectedComponent}
                   onDeleteComponent={handleDeleteComponent}
                   onUpdateComponent={(component) => {
-                    console.log('📦 PropertiesPanel onUpdateComponent called with:', component);
-                    console.log('📦 Component dimensions provided:', component.dimensions);
-                    
                     // Always update selectedComponent with the EXACT dimensions provided
                     // Do NOT recalculate from bounding box - use the values as-is
                     setSelectedComponent(component);
@@ -873,7 +992,6 @@ const Index = () => {
                     // Also update the corresponding SceneComponent's bounding_box
                     // to reflect dimension changes in the 3D preview
                     if (component.dimensions && component.id) {
-                      console.log('📦 Updating SceneComponent bounding_box for:', component.id);
                       const sceneComp = sceneComponents.find(c => c.id === component.id);
                       if (sceneComp) {
                         // Calculate center based on existing bounding box if present, else use current position
@@ -897,14 +1015,8 @@ const Index = () => {
                           ? Number(component.dimensions.length)
                           : Math.abs(oldMax[2] - oldMin[2]) || 1;
                         
-                        console.log('📏 Dimension update (using provided values):', { 
-                          new: { newWidth, newHeight, newLength },
-                          provided: component.dimensions 
-                        });
-                        
                         // Validate dimensions are reasonable (prevent huge jumps)
                         if (newWidth > 1000 || newHeight > 2000 || newLength > 5000) {
-                          console.error('⚠️ Suspicious dimension values detected:', { newWidth, newHeight, newLength });
                           return; // Reject suspicious values
                         }
                         
@@ -927,9 +1039,6 @@ const Index = () => {
                           ],
                         };
                         
-                        console.log('📦 New bounding box:', newBoundingBox);
-                        console.log('📦 Calculated length:', validLength, 'from Z-axis:', newBoundingBox.max[2] - newBoundingBox.min[2]);
-                        
                         handleUpdateComponent(component.id, {
                           bounding_box: newBoundingBox,
                         });
@@ -949,4 +1058,4 @@ const Index = () => {
   );
 };
 
-export default Index;
+export default Builder;

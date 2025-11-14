@@ -38,16 +38,27 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
 
   // Initialize state from selectedComponent dimensions
   const getInitialLength = () => {
-    const val = selectedComponent.dimensions.length || 2175; // Default 2.175m (midpoint of range)
-    return roundAndClampLength(val);
+    // Use the dimension from selectedComponent if available, otherwise use a reasonable default
+    const val = selectedComponent.dimensions?.length;
+    if (val !== undefined && val !== null && val > 0) {
+      return roundAndClampLength(val);
+    }
+    // Default to midpoint of range if no dimension provided
+    return roundAndClampLength((LENGTH_MIN + LENGTH_MAX) / 2);
   };
   const getInitialWidth = () => {
-    const val = selectedComponent.dimensions.width || 475; // Default 0.475m (midpoint of range)
-    return roundAndClampWidth(val);
+    const val = selectedComponent.dimensions?.width;
+    if (val !== undefined && val !== null && val > 0) {
+      return roundAndClampWidth(val);
+    }
+    return roundAndClampWidth((WIDTH_MIN + WIDTH_MAX) / 2);
   };
   const getInitialHeight = () => {
-    const val = selectedComponent.dimensions.height || 900; // Default 0.9m (midpoint of range)
-    return roundAndClampHeight(val);
+    const val = selectedComponent.dimensions?.height;
+    if (val !== undefined && val !== null && val > 0) {
+      return roundAndClampHeight(val);
+    }
+    return roundAndClampHeight((HEIGHT_MIN + HEIGHT_MAX) / 2);
   };
   
   const [length, setLength] = useState<number>(getInitialLength());
@@ -77,21 +88,12 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
     // Ensure we're working with a valid number
     const numValue = Number(newValue);
     if (isNaN(numValue) || !isFinite(numValue)) {
-      console.warn('Invalid length value:', newValue);
       return lengthRef.current;
     }
-    // Validate the value is reasonable (not a huge jump)
-    const current = lengthRef.current;
-    if (Math.abs(numValue - current) > 1000) {
-      console.error('⚠️ Suspicious length jump detected:', { current, new: numValue, diff: Math.abs(numValue - current) });
-      return current; // Reject huge jumps
-    }
     const clamped = roundAndClampLength(numValue);
-    // Only update if value actually changed
-    if (clamped !== current) {
-      lengthRef.current = clamped;
-      setLength(clamped);
-    }
+    // Always update ref and state immediately for instant UI feedback
+    lengthRef.current = clamped;
+    setLength(clamped);
     return clamped;
   }, []);
   
@@ -99,21 +101,12 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
     // Ensure we're working with a valid number
     const numValue = Number(newValue);
     if (isNaN(numValue) || !isFinite(numValue)) {
-      console.warn('Invalid width value:', newValue);
       return widthRef.current;
     }
-    // Validate the value is reasonable (not a huge jump)
-    const current = widthRef.current;
-    if (Math.abs(numValue - current) > 100) {
-      console.error('⚠️ Suspicious width jump detected:', { current, new: numValue, diff: Math.abs(numValue - current) });
-      return current; // Reject huge jumps
-    }
     const clamped = roundAndClampWidth(numValue);
-    // Only update if value actually changed
-    if (clamped !== current) {
-      widthRef.current = clamped;
-      setWidth(clamped);
-    }
+    // Always update ref and state immediately for instant UI feedback
+    widthRef.current = clamped;
+    setWidth(clamped);
     return clamped;
   }, []);
   
@@ -121,21 +114,12 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
     // Ensure we're working with a valid number
     const numValue = Number(newValue);
     if (isNaN(numValue) || !isFinite(numValue)) {
-      console.warn('Invalid height value:', newValue);
       return heightRef.current;
     }
-    // Validate the value is reasonable (not a huge jump)
-    const current = heightRef.current;
-    if (Math.abs(numValue - current) > 500) {
-      console.error('⚠️ Suspicious height jump detected:', { current, new: numValue, diff: Math.abs(numValue - current) });
-      return current; // Reject huge jumps
-    }
     const clamped = roundAndClampHeight(numValue);
-    // Only update if value actually changed
-    if (clamped !== current) {
-      heightRef.current = clamped;
-      setHeight(clamped);
-    }
+    // Always update ref and state immediately for instant UI feedback
+    heightRef.current = clamped;
+    setHeight(clamped);
     return clamped;
   }, []);
 
@@ -148,7 +132,6 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
   useEffect(() => {
     // Only reset if the component ID actually changed, not just dimensions
     if (componentId !== selectedComponent.id && !isUpdatingRef.current) {
-      console.log('🔄 Component ID changed, resetting dimensions. Old ID:', componentId, 'New ID:', selectedComponent.id);
       const newLength = getInitialLength();
       const newWidth = getInitialWidth();
       const newHeight = getInitialHeight();
@@ -159,7 +142,12 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
       widthRef.current = newWidth;
       heightRef.current = newHeight;
       setComponentId(selectedComponent.id);
-      lastNotifiedDimensionsRef.current = {};
+      // Initialize lastNotifiedDimensionsRef with current values to prevent false validation failures
+      lastNotifiedDimensionsRef.current = {
+        length: newLength,
+        width: newWidth,
+        height: newHeight
+      };
     }
     // DO NOT sync dimensions from props - we control our own state
     // This prevents the parent's dimension updates from resetting our local state
@@ -169,22 +157,46 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
   const selectedComponentRef = useRef(selectedComponent);
   useEffect(() => {
     selectedComponentRef.current = selectedComponent;
-    // If dimensions changed from parent (and it's the same component), sync refs but NOT state
-    // This ensures refs are always up-to-date without triggering a state reset
+    // Only sync from parent if we're not currently updating (to prevent feedback loop)
+    // And only if the component ID matches
     if (selectedComponent.id === componentId && !isUpdatingRef.current) {
-      // Only update refs if the dimensions are different and reasonable
-      if (selectedComponent.dimensions.length !== undefined && 
-          Math.abs(selectedComponent.dimensions.length - lengthRef.current) < 100) {
-        lengthRef.current = roundAndClampLength(selectedComponent.dimensions.length);
+      // Sync dimensions from parent only if they're significantly different
+      // This prevents unnecessary re-renders while still allowing external updates
+      if (selectedComponent.dimensions.length !== undefined) {
+        const newLength = roundAndClampLength(selectedComponent.dimensions.length);
+        // Only update if the difference is significant (more than step size)
+        if (Math.abs(newLength - lengthRef.current) > STEP_SIZE / 2) {
+          lengthRef.current = newLength;
+          setLength(newLength);
+        }
       }
-      if (selectedComponent.dimensions.width !== undefined && 
-          Math.abs(selectedComponent.dimensions.width - widthRef.current) < 100) {
-        widthRef.current = roundAndClampWidth(selectedComponent.dimensions.width);
+      if (selectedComponent.dimensions.width !== undefined) {
+        const newWidth = roundAndClampWidth(selectedComponent.dimensions.width);
+        if (Math.abs(newWidth - widthRef.current) > STEP_SIZE / 2) {
+          widthRef.current = newWidth;
+          setWidth(newWidth);
+        }
       }
-      if (selectedComponent.dimensions.height !== undefined && 
-          Math.abs(selectedComponent.dimensions.height - heightRef.current) < 100) {
-        heightRef.current = roundAndClampHeight(selectedComponent.dimensions.height);
+      if (selectedComponent.dimensions.height !== undefined) {
+        const newHeight = roundAndClampHeight(selectedComponent.dimensions.height);
+        if (Math.abs(newHeight - heightRef.current) > STEP_SIZE / 2) {
+          heightRef.current = newHeight;
+          setHeight(newHeight);
+        }
       }
+      
+      // Sync lastNotifiedDimensionsRef to match current dimensions
+      lastNotifiedDimensionsRef.current = {
+        length: selectedComponent.dimensions.length !== undefined 
+          ? roundAndClampLength(selectedComponent.dimensions.length) 
+          : lastNotifiedDimensionsRef.current.length,
+        width: selectedComponent.dimensions.width !== undefined 
+          ? roundAndClampWidth(selectedComponent.dimensions.width) 
+          : lastNotifiedDimensionsRef.current.width,
+        height: selectedComponent.dimensions.height !== undefined 
+          ? roundAndClampHeight(selectedComponent.dimensions.height) 
+          : lastNotifiedDimensionsRef.current.height
+      };
     }
   }, [selectedComponent, componentId]);
 
@@ -195,50 +207,13 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
     const clampedWidth = newWidth !== undefined ? roundAndClampWidth(newWidth) : roundAndClampWidth(widthRef.current);
     const clampedHeight = newHeight !== undefined ? roundAndClampHeight(newHeight) : roundAndClampHeight(heightRef.current);
     
-    // Validate that the change is reasonable (prevent huge jumps)
-    // Only check the dimension that's actually being changed
-    if (newLength !== undefined) {
-      const lastLength = lastNotifiedDimensionsRef.current.length ?? lengthRef.current;
-      if (Math.abs(clampedLength - lastLength) > 100) {
-        console.error('⚠️ Suspicious length jump detected, rejecting:', {
-          from: lastLength, 
-          to: clampedLength, 
-          diff: Math.abs(clampedLength - lastLength)
-        });
-        return; // Reject suspicious jumps
-      }
-    }
-    if (newWidth !== undefined) {
-      const lastWidth = lastNotifiedDimensionsRef.current.width ?? widthRef.current;
-      if (Math.abs(clampedWidth - lastWidth) > 100) {
-        console.error('⚠️ Suspicious width jump detected, rejecting:', {
-          from: lastWidth, 
-          to: clampedWidth, 
-          diff: Math.abs(clampedWidth - lastWidth)
-        });
-        return; // Reject suspicious jumps
-      }
-    }
-    if (newHeight !== undefined) {
-      const lastHeight = lastNotifiedDimensionsRef.current.height ?? heightRef.current;
-      if (Math.abs(clampedHeight - lastHeight) > 100) {
-        console.error('⚠️ Suspicious height jump detected, rejecting:', {
-          from: lastHeight, 
-          to: clampedHeight, 
-          diff: Math.abs(clampedHeight - lastHeight)
-        });
-        return; // Reject suspicious jumps
-      }
-    }
-    
     // Use the latest selectedComponent from ref, not closure
     const currentComponent = selectedComponentRef.current;
     if (!currentComponent) {
-      console.warn('⚠️ Cannot notify parent: selectedComponent is not available');
       return;
     }
     
-    // Store what we're about to notify
+    // Store what we're about to notify BEFORE calling onUpdateComponent
     lastNotifiedDimensionsRef.current = {
       length: clampedLength,
       width: clampedWidth,
@@ -255,9 +230,10 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
       },
     };
 
+    // Set flag to prevent feedback loop
     isUpdatingRef.current = true;
     onUpdateComponent(updatedComponent);
-    // Reset flag after a brief delay to allow parent update to complete
+    // Reset flag after parent has processed the update
     setTimeout(() => {
       isUpdatingRef.current = false;
     }, 100);
@@ -271,59 +247,53 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
 
   const handleLengthIncrement = useCallback(() => {
     const currentLength = lengthRef.current;
-    // Ensure we're working with a valid number
     if (isNaN(currentLength) || currentLength === undefined || currentLength === null || !isFinite(currentLength)) {
-      console.error('Invalid current length:', currentLength);
       return;
     }
-    // Calculate new value exactly - ensure it's a simple addition
     const numCurrent = Number(currentLength);
     const newValue = numCurrent + STEP_SIZE;
     
-    // Validate the increment is reasonable
     if (newValue - numCurrent !== STEP_SIZE) {
-      console.error('⚠️ Math error in increment:', { current: numCurrent, step: STEP_SIZE, result: newValue });
       return;
     }
     
-    console.log('📏 Length increment:', { current: numCurrent, step: STEP_SIZE, new: newValue });
+    // Update state immediately for instant UI feedback
     const clamped = updateLength(newValue);
-    console.log('📏 Length after clamp:', clamped);
     
-    // Only notify if value actually changed and is within bounds
+    // Update lastNotifiedDimensionsRef immediately to prevent validation issues
+    lastNotifiedDimensionsRef.current = {
+      ...lastNotifiedDimensionsRef.current,
+      length: clamped
+    };
+    
     if (clamped !== numCurrent && clamped >= LENGTH_MIN && clamped <= LENGTH_MAX) {
       notifyParent(clamped, undefined, undefined);
-    } else {
-      console.warn('📏 Length increment skipped:', { clamped, currentLength: numCurrent, min: LENGTH_MIN, max: LENGTH_MAX });
     }
   }, [notifyParent, updateLength]);
 
   const handleLengthDecrement = useCallback(() => {
     const currentLength = lengthRef.current;
-    // Ensure we're working with a valid number
     if (isNaN(currentLength) || currentLength === undefined || currentLength === null || !isFinite(currentLength)) {
-      console.error('Invalid current length:', currentLength);
       return;
     }
-    // Calculate new value exactly - ensure it's a simple subtraction
     const numCurrent = Number(currentLength);
     const newValue = numCurrent - STEP_SIZE;
     
-    // Validate the decrement is reasonable
     if (numCurrent - newValue !== STEP_SIZE) {
-      console.error('⚠️ Math error in decrement:', { current: numCurrent, step: STEP_SIZE, result: newValue });
       return;
     }
     
-    console.log('📏 Length decrement:', { current: numCurrent, step: STEP_SIZE, new: newValue });
+    // Update state immediately for instant UI feedback
     const clamped = updateLength(newValue);
-    console.log('📏 Length after clamp:', clamped);
     
-    // Only notify if value actually changed and is within bounds
+    // Update lastNotifiedDimensionsRef immediately to prevent validation issues
+    lastNotifiedDimensionsRef.current = {
+      ...lastNotifiedDimensionsRef.current,
+      length: clamped
+    };
+    
     if (clamped !== numCurrent && clamped >= LENGTH_MIN && clamped <= LENGTH_MAX) {
       notifyParent(clamped, undefined, undefined);
-    } else {
-      console.warn('📏 Length decrement skipped:', { clamped, currentLength: numCurrent, min: LENGTH_MIN, max: LENGTH_MAX });
     }
   }, [notifyParent, updateLength]);
 
@@ -339,59 +309,53 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
 
   const handleWidthIncrement = useCallback(() => {
     const currentWidth = widthRef.current;
-    // Ensure we're working with a valid number
     if (isNaN(currentWidth) || currentWidth === undefined || currentWidth === null || !isFinite(currentWidth)) {
-      console.error('Invalid current width:', currentWidth);
       return;
     }
-    // Calculate new value exactly - ensure it's a simple addition
     const numCurrent = Number(currentWidth);
     const newValue = numCurrent + STEP_SIZE;
     
-    // Validate the increment is reasonable
     if (newValue - numCurrent !== STEP_SIZE) {
-      console.error('⚠️ Math error in increment:', { current: numCurrent, step: STEP_SIZE, result: newValue });
       return;
     }
     
-    console.log('📏 Width increment:', { current: numCurrent, step: STEP_SIZE, new: newValue });
+    // Update state immediately for instant UI feedback
     const clamped = updateWidth(newValue);
-    console.log('📏 Width after clamp:', clamped);
     
-    // Only notify if value actually changed and is within bounds
+    // Update lastNotifiedDimensionsRef immediately to prevent validation issues
+    lastNotifiedDimensionsRef.current = {
+      ...lastNotifiedDimensionsRef.current,
+      width: clamped
+    };
+    
     if (clamped !== numCurrent && clamped >= WIDTH_MIN && clamped <= WIDTH_MAX) {
       notifyParent(undefined, clamped, undefined);
-    } else {
-      console.warn('📏 Width increment skipped:', { clamped, currentWidth: numCurrent, min: WIDTH_MIN, max: WIDTH_MAX });
     }
   }, [notifyParent, updateWidth]);
 
   const handleWidthDecrement = useCallback(() => {
     const currentWidth = widthRef.current;
-    // Ensure we're working with a valid number
     if (isNaN(currentWidth) || currentWidth === undefined || currentWidth === null || !isFinite(currentWidth)) {
-      console.error('Invalid current width:', currentWidth);
       return;
     }
-    // Calculate new value exactly - ensure it's a simple subtraction
     const numCurrent = Number(currentWidth);
     const newValue = numCurrent - STEP_SIZE;
     
-    // Validate the decrement is reasonable
     if (numCurrent - newValue !== STEP_SIZE) {
-      console.error('⚠️ Math error in decrement:', { current: numCurrent, step: STEP_SIZE, result: newValue });
       return;
     }
     
-    console.log('📏 Width decrement:', { current: numCurrent, step: STEP_SIZE, new: newValue });
+    // Update state immediately for instant UI feedback
     const clamped = updateWidth(newValue);
-    console.log('📏 Width after clamp:', clamped);
     
-    // Only notify if value actually changed and is within bounds
+    // Update lastNotifiedDimensionsRef immediately to prevent validation issues
+    lastNotifiedDimensionsRef.current = {
+      ...lastNotifiedDimensionsRef.current,
+      width: clamped
+    };
+    
     if (clamped !== numCurrent && clamped >= WIDTH_MIN && clamped <= WIDTH_MAX) {
       notifyParent(undefined, clamped, undefined);
-    } else {
-      console.warn('📏 Width decrement skipped:', { clamped, currentWidth: numCurrent, min: WIDTH_MIN, max: WIDTH_MAX });
     }
   }, [notifyParent, updateWidth]);
 
@@ -407,59 +371,53 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
 
   const handleHeightIncrement = useCallback(() => {
     const currentHeight = heightRef.current;
-    // Ensure we're working with a valid number
     if (isNaN(currentHeight) || currentHeight === undefined || currentHeight === null || !isFinite(currentHeight)) {
-      console.error('Invalid current height:', currentHeight);
       return;
     }
-    // Calculate new value exactly - ensure it's a simple addition
     const numCurrent = Number(currentHeight);
     const newValue = numCurrent + STEP_SIZE;
     
-    // Validate the increment is reasonable
     if (newValue - numCurrent !== STEP_SIZE) {
-      console.error('⚠️ Math error in increment:', { current: numCurrent, step: STEP_SIZE, result: newValue });
       return;
     }
     
-    console.log('📏 Height increment:', { current: numCurrent, step: STEP_SIZE, new: newValue });
+    // Update state immediately for instant UI feedback
     const clamped = updateHeight(newValue);
-    console.log('📏 Height after clamp:', clamped);
     
-    // Only notify if value actually changed and is within bounds
+    // Update lastNotifiedDimensionsRef immediately to prevent validation issues
+    lastNotifiedDimensionsRef.current = {
+      ...lastNotifiedDimensionsRef.current,
+      height: clamped
+    };
+    
     if (clamped !== numCurrent && clamped >= HEIGHT_MIN && clamped <= HEIGHT_MAX) {
       notifyParent(undefined, undefined, clamped);
-    } else {
-      console.warn('📏 Height increment skipped:', { clamped, currentHeight: numCurrent, min: HEIGHT_MIN, max: HEIGHT_MAX });
     }
   }, [notifyParent, updateHeight]);
 
   const handleHeightDecrement = useCallback(() => {
     const currentHeight = heightRef.current;
-    // Ensure we're working with a valid number
     if (isNaN(currentHeight) || currentHeight === undefined || currentHeight === null || !isFinite(currentHeight)) {
-      console.error('Invalid current height:', currentHeight);
       return;
     }
-    // Calculate new value exactly - ensure it's a simple subtraction
     const numCurrent = Number(currentHeight);
     const newValue = numCurrent - STEP_SIZE;
     
-    // Validate the decrement is reasonable
     if (numCurrent - newValue !== STEP_SIZE) {
-      console.error('⚠️ Math error in decrement:', { current: numCurrent, step: STEP_SIZE, result: newValue });
       return;
     }
     
-    console.log('📏 Height decrement:', { current: numCurrent, step: STEP_SIZE, new: newValue });
+    // Update state immediately for instant UI feedback
     const clamped = updateHeight(newValue);
-    console.log('📏 Height after clamp:', clamped);
     
-    // Only notify if value actually changed and is within bounds
+    // Update lastNotifiedDimensionsRef immediately to prevent validation issues
+    lastNotifiedDimensionsRef.current = {
+      ...lastNotifiedDimensionsRef.current,
+      height: clamped
+    };
+    
     if (clamped !== numCurrent && clamped >= HEIGHT_MIN && clamped <= HEIGHT_MAX) {
       notifyParent(undefined, undefined, clamped);
-    } else {
-      console.warn('📏 Height decrement skipped:', { clamped, currentHeight: numCurrent, min: HEIGHT_MIN, max: HEIGHT_MAX });
     }
   }, [notifyParent, updateHeight]);
 

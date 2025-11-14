@@ -23,6 +23,10 @@ export interface ConveyorComponent {
   specifications: Record<string, string | number>;
   cost?: number;
   partNumber?: string;
+  processing_status?: string;
+  processing_error?: string;
+  glb_url?: string | null;
+  original_url?: string | null;
 }
 
 export interface BOMItem {
