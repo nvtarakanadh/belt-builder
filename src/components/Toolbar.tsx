@@ -18,7 +18,13 @@ import {
   Eye,
   Undo2,
   Redo2,
-  Building2
+  Building2,
+  Focus,
+  ZoomIn,
+  ZoomOut,
+  Hand,
+  Eraser,
+  Settings
 } from "lucide-react";
 
 interface ToolbarProps {
@@ -34,14 +40,139 @@ interface ToolbarProps {
   canRedo?: boolean;
   onSave?: () => void;
   saveStatus?: 'idle' | 'saving' | 'saved' | 'error';
+  // New view control callbacks
+  onCenterView?: () => void;
+  onZoomIn?: () => void;
+  onZoomOut?: () => void;
+  onPanMode?: () => void;
+  onErase?: () => void;
+  onSettings?: () => void;
+  panModeActive?: boolean;
 }
 
-export const Toolbar = ({ onToolSelect, activeTool, viewMode, onViewModeChange, showGrid = true, onToggleGrid, onUndo, onRedo, canUndo = false, canRedo = false, onSave, saveStatus = 'idle' }: ToolbarProps) => {
+export const Toolbar = ({ 
+  onToolSelect, 
+  activeTool, 
+  viewMode, 
+  onViewModeChange, 
+  showGrid = true, 
+  onToggleGrid, 
+  onUndo, 
+  onRedo, 
+  canUndo = false, 
+  canRedo = false, 
+  onSave, 
+  saveStatus = 'idle',
+  onCenterView,
+  onZoomIn,
+  onZoomOut,
+  onPanMode,
+  onErase,
+  onSettings,
+  panModeActive = false
+}: ToolbarProps) => {
   return (
     <TooltipProvider>
       <div className="panel-glass px-4 py-3 flex items-center gap-2">
         <h1 className="text-xl font-bold text-gradient mr-4">UnoTEAM's Conveyor Designer</h1>
         
+        <Separator orientation="vertical" className="h-8" />
+        
+        {/* View Controls Toolbar */}
+        <div className="flex gap-1 bg-secondary/30 rounded-lg p-1 border border-border/50 shadow-sm">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant={activeTool === 'center' ? 'default' : 'ghost'}
+                size="icon"
+                onClick={onCenterView}
+                className="h-8 w-8"
+              >
+                <Focus className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              <p>Center View</p>
+            </TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={onZoomIn}
+                className="h-8 w-8"
+              >
+                <ZoomIn className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              <p>Zoom In</p>
+            </TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={onZoomOut}
+                className="h-8 w-8"
+              >
+                <ZoomOut className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              <p>Zoom Out</p>
+            </TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant={panModeActive ? 'default' : 'ghost'}
+                size="icon"
+                onClick={onPanMode}
+                className="h-8 w-8"
+                style={panModeActive ? { cursor: 'grabbing' } : {}}
+              >
+                <Hand className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              <p>Pan / Move</p>
+            </TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={onErase}
+                className="h-8 w-8"
+              >
+                <Eraser className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              <p>Erase / Clear</p>
+            </TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant={activeTool === 'settings' ? 'default' : 'ghost'}
+                size="icon"
+                onClick={onSettings}
+                className="h-8 w-8"
+              >
+                <Settings className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              <p>Settings</p>
+            </TooltipContent>
+          </Tooltip>
+        </div>
+
         <Separator orientation="vertical" className="h-8" />
         
         <div className="flex gap-1">

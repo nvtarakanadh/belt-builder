@@ -1,4 +1,4 @@
-import { Suspense } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, PerspectiveCamera, useGLTF, Environment } from '@react-three/drei';
 import * as THREE from 'three';
@@ -26,12 +26,17 @@ function ErrorCatcher({ children }: { children: React.ReactNode }) {
 
 // Simple GLB Model Loader with error handling
 function GLBPreview({ url }: { url: string }) {
+  console.log('🎨 GLBPreview loading URL:', url);
+  
   try {
-    const { scene } = useGLTF(url);
+    const { scene } = useGLTF(url, true); // Use true for crossOrigin
     
     if (!scene) {
+      console.warn('⚠️ GLB scene is null for URL:', url);
       return <PreviewPlaceholder />;
     }
+    
+    console.log('✅ GLB scene loaded successfully:', url);
     
     const clonedScene = scene.clone();
 
@@ -42,6 +47,8 @@ function GLBPreview({ url }: { url: string }) {
     box.getCenter(center);
     box.getSize(size);
     
+    console.log('📏 Model dimensions:', size.x, size.y, size.z);
+    
     // Center the model
     clonedScene.position.sub(center);
     
@@ -50,12 +57,15 @@ function GLBPreview({ url }: { url: string }) {
     if (maxDim > 0) {
       const scale = 1.5 / maxDim;
       clonedScene.scale.set(scale, scale, scale);
+      console.log('📐 Scaled model by:', scale);
+    } else {
+      console.warn('⚠️ Model has zero dimensions, using default scale');
     }
 
     return <primitive object={clonedScene} />;
   } catch (error) {
     // Errors in useGLTF are handled by Suspense, but catch any other errors
-    console.warn('GLB preview error:', error);
+    console.error('❌ GLB preview error:', error, 'URL:', url);
     return <PreviewPlaceholder />;
   }
 }
@@ -65,30 +75,56 @@ function PreviewPlaceholder() {
   return (
     <mesh>
       <boxGeometry args={[0.8, 0.8, 0.8]} />
-      <meshStandardMaterial color="#888" />
+      <meshStandardMaterial color="#666" metalness={0.3} roughness={0.7} />
     </mesh>
   );
 }
 
 function PreviewContent({ glbUrl, originalUrl, apiBase }: ComponentLibraryPreviewProps) {
+  console.log('🎨 PreviewContent - glbUrl:', glbUrl, 'apiBase:', apiBase);
+  
   // Format URLs to be absolute if needed
   let formattedGlbUrl = glbUrl;
   
   if (apiBase && formattedGlbUrl && !formattedGlbUrl.startsWith('http')) {
     formattedGlbUrl = `${apiBase}${formattedGlbUrl.startsWith('/') ? formattedGlbUrl : '/' + formattedGlbUrl}`;
+    console.log('🔗 Formatted GLB URL:', formattedGlbUrl);
   }
 
   // Only try GLB files for simplicity
   if (formattedGlbUrl && formattedGlbUrl.trim() !== '' && formattedGlbUrl !== 'null') {
-    return <GLBPreview url={formattedGlbUrl} />;
+    console.log('✅ Attempting to load GLB preview:', formattedGlbUrl);
+    try {
+      return <GLBPreview url={formattedGlbUrl} />;
+    } catch (error) {
+      console.error('❌ Failed to load GLB preview:', error);
+      return <PreviewPlaceholder />;
+    }
   }
 
   // No model available
+  console.warn('⚠️ No GLB URL available, showing placeholder');
   return <PreviewPlaceholder />;
 }
 
 export function ComponentLibraryPreview({ glbUrl, originalUrl, category, apiBase }: ComponentLibraryPreviewProps) {
+  const [formattedGlbUrl, setFormattedGlbUrl] = useState<string | null>(null);
   const hasModel = (glbUrl && glbUrl.trim() !== '' && glbUrl !== 'null');
+
+  // Format URL when glbUrl or apiBase changes
+  useEffect(() => {
+    if (glbUrl && glbUrl.trim() !== '' && glbUrl !== 'null') {
+      let url = glbUrl;
+      if (apiBase && !url.startsWith('http')) {
+        url = `${apiBase}${url.startsWith('/') ? url : '/' + url}`;
+      }
+      console.log('🔄 ComponentLibraryPreview - Setting formatted URL:', url);
+      setFormattedGlbUrl(url);
+    } else {
+      console.log('⚠️ ComponentLibraryPreview - No GLB URL provided');
+      setFormattedGlbUrl(null);
+    }
+  }, [glbUrl, apiBase]);
 
   return (
     <div 
@@ -105,24 +141,39 @@ export function ComponentLibraryPreview({ glbUrl, originalUrl, category, apiBase
         <ErrorCatcher>
           <Canvas 
             shadows
-            style={{ width: '100%', height: '100%', pointerEvents: 'none' }}
+            style={{ 
+              width: '100%', 
+              height: '100%', 
+              pointerEvents: 'none',
+              userSelect: 'none',
+              WebkitUserSelect: 'none',
+              touchAction: 'none'
+            }}
             gl={{ preserveDrawingBuffer: true, antialias: false }}
+            onCreated={(state) => {
+              // Ensure canvas doesn't capture pointer events
+              if (state.gl && state.gl.domElement) {
+                state.gl.domElement.style.pointerEvents = 'none';
+                state.gl.domElement.style.userSelect = 'none';
+              }
+            }}
+            key={formattedGlbUrl || 'no-model'} // Force re-render when URL changes
           >
             <PerspectiveCamera makeDefault position={[2, 2, 2]} fov={50} />
             {/* Auto-rotate only, no manual controls */}
             <OrbitControls 
               enableZoom={false}
               enablePan={false}
-              enableRotate={false}
+              enableRotate={true}
               autoRotate
-              autoRotateSpeed={1}
-              enabled={false}
+              autoRotateSpeed={0.5}
+              enabled={true}
             />
             <ambientLight intensity={0.6} />
             <directionalLight position={[3, 3, 3]} intensity={0.7} />
             <pointLight position={[-3, 3, -3]} intensity={0.3} />
             <Environment preset="warehouse" />
-            <PreviewContent glbUrl={glbUrl} originalUrl={originalUrl} apiBase={apiBase} />
+            <PreviewContent glbUrl={formattedGlbUrl || glbUrl} originalUrl={originalUrl} apiBase={apiBase} />
           </Canvas>
         </ErrorCatcher>
       </Suspense>

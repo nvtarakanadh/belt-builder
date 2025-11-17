@@ -1,12 +1,43 @@
-import { useState, useCallback, useRef, Suspense, useEffect, useMemo, ErrorInfo } from 'react';
+import { useState, useCallback, useRef, Suspense, useEffect, useMemo, ErrorInfo, useImperativeHandle, forwardRef } from 'react';
 import { Canvas, useThree, useFrame } from '@react-three/fiber';
-import { OrbitControls, Grid, Environment, PerspectiveCamera, useGLTF, TransformControls } from '@react-three/drei';
+import { OrbitControls, Grid, Environment, PerspectiveCamera, OrthographicCamera, useGLTF, TransformControls, GizmoHelper, GizmoViewport } from '@react-three/drei';
 import { useLoader } from '@react-three/fiber';
 // type-only declarations are provided in src/types/three-extensions.d.ts
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader';
 import * as THREE from 'three';
 import { SlotPlacementSystem } from './SlotPlacementSystem';
+import { FPSCounter } from './FPSCounter';
+import { CameraPreviewCube } from './CameraPreviewCube';
+
+// Smooth camera animation helper using lerp
+function lerp(start: number, end: number, factor: number): number {
+  return start + (end - start) * factor;
+}
+
+// Component to update camera state for preview cube
+function CameraStateUpdater({ 
+  cameraRef, 
+  controlsRef, 
+  onUpdate 
+}: { 
+  cameraRef: React.MutableRefObject<THREE.Camera | null>; 
+  controlsRef: React.RefObject<any>; 
+  onUpdate: (camera: THREE.Camera | null, controls: any) => void;
+}) {
+  useFrame(() => {
+    if (cameraRef.current && controlsRef.current) {
+      onUpdate(cameraRef.current, controlsRef.current);
+    }
+  });
+  return null;
+}
+
+function lerpVector3(start: THREE.Vector3, end: THREE.Vector3, factor: number, out: THREE.Vector3): void {
+  out.x = lerp(start.x, end.x, factor);
+  out.y = lerp(start.y, end.y, factor);
+  out.z = lerp(start.z, end.z, factor);
+}
 
 type SceneComponent = {
   id: string;
@@ -154,46 +185,48 @@ function CameraController({ components }: { components: SceneComponent[] }) {
   }, [camera]);
   
   // Auto-fit camera only when components are added/removed, not when dimensions change
-  useEffect(() => {
-    // Create a string of component IDs to detect actual additions/removals
-    const currentIds = components.map(c => c.id).sort().join(',');
-    
-    // Only auto-fit if the component IDs have changed (additions/removals)
-    // Not if only bounding boxes or other properties changed
-    if (currentIds !== componentIdsRef.current) {
-      componentIdsRef.current = currentIds;
-      
-      if (components.length > 0 && !hasUserInteractedRef.current) {
-        // Skip auto-fit on initial load to prevent blank screen
-        // Only auto-fit when new components are added (not on initial page load)
-        if (isInitialLoadRef.current) {
-          isInitialLoadRef.current = false;
-          return; // Don't auto-fit on initial load
-        }
-        
-        // For subsequent additions, fit after a short delay
-        const delay = 300;
-        
-        const timeoutId = setTimeout(() => {
-          // Only auto-fit if user hasn't manually moved the camera
-          // Double-check that components still exist and user hasn't interacted
-          if (!hasUserInteractedRef.current && components.length > 0) {
-            try {
-              fitCameraToScene();
-              // Update last position after auto-fit
-              lastCameraPositionRef.current = camera.position.clone();
-            } catch (error) {
-              console.error('Error fitting camera to scene:', error);
-            }
-          }
-        }, delay);
-        
-        return () => {
-          clearTimeout(timeoutId);
-        };
-      }
-    }
-  }, [components, fitCameraToScene, camera]);
+  // DISABLED: Auto-fit camera when components are added - this was causing components to appear to move
+  // Users can manually use the Center View button if they want to fit the camera
+  // useEffect(() => {
+  //   // Create a string of component IDs to detect actual additions/removals
+  //   const currentIds = components.map(c => c.id).sort().join(',');
+  //   
+  //   // Only auto-fit if the component IDs have changed (additions/removals)
+  //   // Not if only bounding boxes or other properties changed
+  //   if (currentIds !== componentIdsRef.current) {
+  //     componentIdsRef.current = currentIds;
+  //     
+  //     if (components.length > 0 && !hasUserInteractedRef.current) {
+  //       // Skip auto-fit on initial load to prevent blank screen
+  //       // Only auto-fit when new components are added (not on initial page load)
+  //       if (isInitialLoadRef.current) {
+  //         isInitialLoadRef.current = false;
+  //         return; // Don't auto-fit on initial load
+  //       }
+  //       
+  //       // For subsequent additions, fit after a short delay
+  //       const delay = 300;
+  //       
+  //       const timeoutId = setTimeout(() => {
+  //         // Only auto-fit if user hasn't manually moved the camera
+  //         // Double-check that components still exist and user hasn't interacted
+  //         if (!hasUserInteractedRef.current && components.length > 0) {
+  //           try {
+  //             fitCameraToScene();
+  //             // Update last position after auto-fit
+  //             lastCameraPositionRef.current = camera.position.clone();
+  //           } catch (error) {
+  //             console.error('Error fitting camera to scene:', error);
+  //           }
+  //         }
+  //       }, delay);
+  //       
+  //       return () => {
+  //         clearTimeout(timeoutId);
+  //       };
+  //     }
+  //   }
+  // }, [components, fitCameraToScene, camera]);
   
   // Expose fit function globally for manual triggering
   useEffect(() => {
@@ -206,6 +239,16 @@ function CameraController({ components }: { components: SceneComponent[] }) {
   return null;
 }
 
+export interface SceneControls {
+  resetCamera: () => void;
+  zoomIn: (factor?: number) => void;
+  zoomOut: (factor?: number) => void;
+  enablePanMode: () => void;
+  disablePanMode: () => void;
+  clearSelection: () => void;
+  clearHighlights: () => void;
+}
+
 interface SceneProps {
   onSelectComponent: (id: string) => void;
   viewMode?: 'focused' | 'shopfloor';
@@ -213,11 +256,24 @@ interface SceneProps {
   components?: SceneComponent[];
   onAddComponent?: (component: Omit<SceneComponent, 'id'>) => void;
   onUpdateComponent?: (id: string, update: Partial<SceneComponent>) => void;
-  activeTool?: string; // Tool from toolbar: 'select', 'move', 'rotate'
+  activeTool?: string; // Tool from toolbar: 'select', 'move', 'rotate', 'pan'
+  controlsRef?: React.MutableRefObject<SceneControls | null>; // Ref to expose camera controls
+  sceneSettings?: {
+    viewMode?: 'realistic' | 'orthographic' | 'wireframe';
+    levelOfDetail?: 'high' | 'medium' | 'low';
+    zoomTarget?: 'center' | 'selection';
+    invertZoom?: boolean;
+    shadows?: boolean;
+    placementPreview?: boolean;
+    coordinateSystem?: boolean;
+    cameraCube?: boolean;
+    grid?: boolean;
+    fpsCounter?: boolean;
+  };
 }
 
 // Component to render GLB models
-function GLBModelContent({ url, position, rotation, selected, onSelect, targetSize, onLoadError }: { 
+function GLBModelContent({ url, position, rotation, selected, onSelect, targetSize, onLoadError, wireframe, category }: { 
   url: string; 
   position: [number, number, number]; 
   rotation?: [number, number, number];
@@ -225,6 +281,8 @@ function GLBModelContent({ url, position, rotation, selected, onSelect, targetSi
   onSelect?: () => void;
   targetSize?: [number, number, number];
   onLoadError?: () => void;
+  wireframe?: boolean;
+  category?: string;
 }) {
   // useGLTF throws a promise during loading (handled by Suspense)
   // Don't wrap in try-catch - let Suspense handle the promise
@@ -242,63 +300,200 @@ function GLBModelContent({ url, position, rotation, selected, onSelect, targetSi
   const originalSizeRef = useRef<THREE.Vector3 | null>(null);
   const hasInitializedRef = useRef(false);
   const lastTargetSizeRef = useRef<string>('');
+  const lastUrlRef = useRef<string>('');
   
-  // Global scale factor: converts mm to scene units (for relative sizing)
-  // This ensures all components maintain their relative sizes
-  // 1mm = 0.01 scene units, so 1000mm = 10 scene units, 100mm = 1 scene unit
-  // This maintains the 10:1 ratio while keeping everything visible
-  const GLOBAL_SCALE_FACTOR = 0.01; // Convert mm to scene units (1mm = 0.01 scene units)
+  // Grid-based scaling: 1 grid unit = 100mm in real life
+  // This makes sizing intuitive - components are sized relative to grid units
+  // Example: A 1000mm component = 10 grid units, a 100mm component = 1 grid unit
+  const GRID_UNIT_SIZE_MM = 100; // 1 grid unit = 100mm
+  const GLOBAL_SCALE_FACTOR = 1.0 / GRID_UNIT_SIZE_MM; // Convert mm to grid units (100mm = 1 grid unit)
+  const GRID_OFFSET = 0.1; // Offset above grid (in scene units) - components sit slightly above grid lines
+  
+  // Reset initialization state when URL changes (new component instance)
+  useEffect(() => {
+    if (url !== lastUrlRef.current) {
+      hasInitializedRef.current = false;
+      originalSizeRef.current = null;
+      lastTargetSizeRef.current = '';
+      lastUrlRef.current = url;
+      // Force re-initialization when URL changes
+    }
+  }, [url]);
+  
+  // Reset initialization when targetSize changes significantly (new component with different dimensions)
+  // This ensures that when a new component is added with default dimensions, it re-initializes
+  useEffect(() => {
+    if (targetSize && targetSize.length === 3) {
+      const normalizeValue = (val: number) => Math.round(val * 10) / 10;
+      const targetSizeKey = `${normalizeValue(targetSize[0])},${normalizeValue(targetSize[1])},${normalizeValue(targetSize[2])}`;
+      
+      // If targetSize changed significantly, reset initialization to force re-scaling
+      if (targetSizeKey !== lastTargetSizeRef.current) {
+        // If we haven't initialized yet, or if this is a completely different targetSize, reset
+        if (!hasInitializedRef.current || lastTargetSizeRef.current === '') {
+          // Reset to force initialization and scaling
+          hasInitializedRef.current = false;
+          lastTargetSizeRef.current = '';
+        }
+      }
+    }
+  }, [targetSize]);
+  
+  // Store axis mapping to determine which model axis corresponds to which dimension
+  const axisMappingRef = useRef<{ width: 'x' | 'y' | 'z', height: 'x' | 'y' | 'z', length: 'x' | 'y' | 'z' } | null>(null);
   
   // Initialize original size ONCE on first load
   useEffect(() => {
     if (hasInitializedRef.current || !clonedScene) return;
     
     try {
-      // Reset scale to 1,1,1 before measuring to ensure we get the true original size
+      // CRITICAL: Reset root transforms before measuring to ensure we get the true original size
+      // Only reset the root scene, not children (children may have their own transforms that are part of the model)
       clonedScene.scale.set(1, 1, 1);
+      clonedScene.position.set(0, 0, 0);
+      clonedScene.rotation.set(0, 0, 0);
+      
+      // Force update matrix to ensure transforms are applied
+      clonedScene.updateMatrixWorld(true);
+      
       const box = new THREE.Box3().setFromObject(clonedScene);
       const size = new THREE.Vector3();
       box.getSize(size);
-      originalSizeRef.current = size.clone();
       
-      hasInitializedRef.current = true;
+      // Store original size, but ensure it's never zero
+      if (size.x > 0 && size.y > 0 && size.z > 0) {
+        originalSizeRef.current = size.clone();
+        
+        // Determine axis mapping based on component category
+        const isConveyor = category?.toLowerCase().includes('belt') || category?.toLowerCase().includes('conveyor');
+        
+        if (isConveyor) {
+          // For conveyor belts, use fixed mapping: X=length, Y=height, Z=width
+          // This is the standard CAD orientation for conveyor belts
+          axisMappingRef.current = {
+            width: 'z',   // width maps to Z axis
+            height: 'y',  // height maps to Y axis
+            length: 'x'   // length maps to X axis
+          };
+        } else {
+          // Standard orientation: width along X, height along Y, length along Z
+          axisMappingRef.current = {
+            width: 'x',
+            height: 'y',
+            length: 'z'
+          };
+        }
+        
+        hasInitializedRef.current = true;
+        // Force scaling to run after initialization by clearing lastTargetSizeRef
+        // This ensures scaling applies on first load even if targetSize was set before initialization
+        lastTargetSizeRef.current = '';
+      } else {
+        // Fallback to a default size if mesh has invalid dimensions
+        originalSizeRef.current = new THREE.Vector3(1, 1, 1);
+        const isConveyor = category?.toLowerCase().includes('belt') || category?.toLowerCase().includes('conveyor');
+        axisMappingRef.current = isConveyor 
+          ? { width: 'z', height: 'y', length: 'x' }
+          : { width: 'x', height: 'y', length: 'z' };
+        hasInitializedRef.current = true;
+        // Force scaling to run after initialization
+        lastTargetSizeRef.current = '';
+      }
     } catch (e) {
       // Silently handle initialization errors
+      originalSizeRef.current = new THREE.Vector3(1, 1, 1);
+      const isConveyor = category?.toLowerCase().includes('belt') || category?.toLowerCase().includes('conveyor');
+      axisMappingRef.current = isConveyor 
+        ? { width: 'z', height: 'y', length: 'x' }
+        : { width: 'x', height: 'y', length: 'z' };
+      hasInitializedRef.current = true;
+      // Force scaling to run after initialization
+      lastTargetSizeRef.current = '';
     }
-  }, [clonedScene]);
+  }, [clonedScene, category]);
   
-  // Update highlighting based on selection state
+  // Update highlighting and wireframe based on selection state (optimized)
   useEffect(() => {
+    if (!clonedScene) return;
+    
+    // Batch material updates for better performance
     clonedScene.traverse((child) => {
       if ((child as THREE.Mesh).isMesh) {
         const mesh = child as THREE.Mesh;
         const material = mesh.material as THREE.MeshStandardMaterial;
         if (material) {
-          if (selected) {
-            material.emissive = new THREE.Color(0x00b4d8);
-            material.emissiveIntensity = 0.3;
-          } else {
-            material.emissive = new THREE.Color(0x000000);
-            material.emissiveIntensity = 0;
+          // Only update if changed
+          const newEmissive = selected ? 0x00b4d8 : 0x000000;
+          const newIntensity = selected ? 0.3 : 0;
+          
+          if (material.emissive.getHex() !== newEmissive || material.emissiveIntensity !== newIntensity) {
+            material.emissive.setHex(newEmissive);
+            material.emissiveIntensity = newIntensity;
+            material.needsUpdate = true;
           }
-          material.needsUpdate = true;
+          
+          // Update wireframe mode
+          if (material.wireframe !== wireframe) {
+            material.wireframe = wireframe ?? false;
+            material.needsUpdate = true;
+          }
         }
       }
     });
-  }, [selected, clonedScene]);
-
-  // Track if model has been centered (only center once)
-  const hasCenteredRef = useRef(false);
+  }, [selected, clonedScene, wireframe]);
+  
+  // Update axis mapping when category changes (in case it wasn't available on initial load)
+  useEffect(() => {
+    if (!originalSizeRef.current) return;
+    
+    const isConveyor = category?.toLowerCase().includes('belt') || category?.toLowerCase().includes('conveyor');
+    
+      if (isConveyor) {
+        axisMappingRef.current = {
+          width: 'z',   // width maps to Z axis
+          height: 'y',  // height maps to Y axis
+          length: 'x'   // length maps to X axis
+        };
+      } else if (axisMappingRef.current && axisMappingRef.current.width === 'z') {
+        // Only update if it was previously set to conveyor mapping
+        axisMappingRef.current = {
+          width: 'x',
+          height: 'y',
+          length: 'z'
+        };
+      }
+  }, [category]);
   
   // Scale to match desired bounding-box size (maintains relative sizing)
+  // This effect should run whenever targetSize changes OR when initialization completes
   useEffect(() => {
-    if (!hasInitializedRef.current || !originalSizeRef.current) return;
+    // Wait for initialization to complete before scaling
+    if (!hasInitializedRef.current || !originalSizeRef.current || !clonedScene) {
+      return;
+    }
     
-    // Create a string key for targetSize to detect actual changes
-    const targetSizeKey = targetSize ? `${targetSize[0]},${targetSize[1]},${targetSize[2]}` : 'none';
+    // Ensure we have a targetSize - if not, we can't scale
+    if (!targetSize || targetSize.length !== 3) {
+      return;
+    }
     
-    // Skip if targetSize hasn't actually changed and model is already centered
-    if (targetSizeKey === lastTargetSizeRef.current && hasCenteredRef.current) {
+    // If URL changed, we need to reset and wait for re-initialization
+    if (url !== lastUrlRef.current) {
+      return;
+    }
+    
+    // CRITICAL: Reset scale to 1,1,1 before applying new scaling
+    // This prevents cumulative scaling and ensures we always scale from the original size
+    clonedScene.scale.set(1, 1, 1);
+    
+    // Create a normalized string key for targetSize to detect actual changes
+    // Round to 1 decimal place to avoid floating point precision issues
+    const normalizeValue = (val: number) => Math.round(val * 10) / 10;
+    const targetSizeKey = `${normalizeValue(targetSize[0])},${normalizeValue(targetSize[1])},${normalizeValue(targetSize[2])}`;
+    
+    // Skip if targetSize hasn't actually changed (even if array reference changed)
+    // BUT always apply on first load (when lastTargetSizeRef is empty)
+    if (targetSizeKey === lastTargetSizeRef.current && lastTargetSizeRef.current !== '') {
       return;
     }
     
@@ -318,45 +513,140 @@ function GLBModelContent({ url, position, rotation, selected, onSelect, targetSi
         // Validate target sizes
         if (targetX > 0 && targetY > 0 && targetZ > 0 &&
             targetX < 10000 && targetY < 10000 && targetZ < 10000 &&
-            isFinite(targetX) && isFinite(targetY) && isFinite(targetZ)) {
+            isFinite(targetX) && isFinite(targetY) && isFinite(targetZ) &&
+            originalSize.x > 0 && originalSize.y > 0 && originalSize.z > 0) {
           
           // Calculate scale factors to match target dimensions
-          // Scale = (target dimension in mm * global scale) / original size
+          // Scale = (target dimension in mm * global scale) / original mesh size
           // This maintains relative sizing: a 1000mm component will be 10x larger than a 100mm component
-          scaleX = (targetX * GLOBAL_SCALE_FACTOR) / originalSize.x;
-          scaleY = (targetY * GLOBAL_SCALE_FACTOR) / originalSize.y;
-          scaleZ = (targetZ * GLOBAL_SCALE_FACTOR) / originalSize.z;
+          // The key is that all components use the same GLOBAL_SCALE_FACTOR, so relative sizes are preserved
           
-          // Clamp scales to reasonable bounds
-          scaleX = Math.max(0.0001, Math.min(10, scaleX));
-          scaleY = Math.max(0.0001, Math.min(10, scaleY));
-          scaleZ = Math.max(0.0001, Math.min(10, scaleZ));
+          // Grid-based scaling: Scale components relative to grid units
+          // 1 grid unit = 100mm, so a 1000mm component = 10 grid units
+          // This ensures relative sizing: a 1000mm component is 10x larger than a 100mm component
+          
+          // Target dimensions are in mm, convert to grid units (scene units)
+          // Example: 1000mm = 10 grid units, 100mm = 1 grid unit
+          // The grid is 1 unit apart, so 1 grid unit = 1 scene unit
+          
+          // targetSize is [width, height, length] from bounding_box
+          // targetX = width, targetY = height, targetZ = length
+          // We need to map these to the correct model axes based on component type
+          const mapping = axisMappingRef.current || { width: 'x', height: 'y', length: 'z' };
+          
+          // Get target dimensions: [width, height, length] from bounding_box
+          // These are the desired dimensions in mm that the model should have
+          const targetWidth = targetX;   // width from bounding_box[0] (X axis in world space)
+          const targetHeight = targetY;  // height from bounding_box[1] (Y axis in world space)
+          const targetLength = targetZ;  // length from bounding_box[2] (Z axis in world space)
+          
+          // Calculate scale factors for each model axis based on the mapping
+          // The mapping tells us which model axis corresponds to which dimension
+          // IMPORTANT: We need to scale each axis independently based on its target dimension
+          const getScaleForAxis = (axis: 'x' | 'y' | 'z', targetDim: number) => {
+            const originalDim = axis === 'x' ? originalSize.x : axis === 'y' ? originalSize.y : originalSize.z;
+            // Convert target dimension from mm to scene units (divide by GRID_UNIT_SIZE_MM)
+            // Then divide by original dimension to get scale factor
+            // This gives us the scale needed to make the model's axis match the target dimension
+            if (originalDim <= 0 || targetDim <= 0) return 1;
+            
+            // Target dimension in scene units (mm / 100 = grid units = scene units)
+            const targetInSceneUnits = targetDim / GRID_UNIT_SIZE_MM;
+            
+            // Calculate scale: how much to scale the original dimension to reach target
+            const scale = targetInSceneUnits / originalDim;
+            
+            // Clamp scale to reasonable bounds to prevent huge or tiny models
+            return isFinite(scale) ? Math.max(0.001, Math.min(100, scale)) : 1;
+          };
+          
+          // Apply mapping: map width/height/length to the correct model axes
+          // The mapping tells us which model axis (x, y, z) corresponds to which dimension (width, height, length)
+          // For conveyors: width->Z, height->Y, length->X
+          // For others: width->X, height->Y, length->Z
+          
+          // Get the target dimension for each model axis based on the mapping
+          // The mapping tells us: for a given model axis, which dimension (width/height/length) should be used
+          // For conveyors: model X axis uses length, model Y axis uses height, model Z axis uses width
+          // For others: model X axis uses width, model Y axis uses height, model Z axis uses length
+          const targetForX = mapping.length === 'x' ? targetLength : mapping.width === 'x' ? targetWidth : targetHeight;
+          const targetForY = mapping.height === 'y' ? targetHeight : mapping.length === 'y' ? targetLength : targetWidth;
+          const targetForZ = mapping.width === 'z' ? targetWidth : mapping.length === 'z' ? targetLength : targetHeight;
+          
+          // Calculate scale for each axis INDEPENDENTLY
+          // Each axis scales based ONLY on its own target dimension
+          scaleX = getScaleForAxis('x', targetForX);
+          scaleY = getScaleForAxis('y', targetForY);
+          scaleZ = getScaleForAxis('z', targetForZ);
+          
+          // Clamp each scale factor to reasonable bounds
+          scaleX = Math.max(0.001, Math.min(50, scaleX));
+          scaleY = Math.max(0.001, Math.min(50, scaleY));
+          scaleZ = Math.max(0.001, Math.min(50, scaleZ));
+          
         }
       } else {
-        // No target size: use global scale factor to maintain relative sizing
-        // This ensures components without bounding boxes still scale consistently
-        scaleX = scaleY = scaleZ = GLOBAL_SCALE_FACTOR;
+        // No target size: use default scale based on grid units
+        // Assume 1 grid unit size for components without bounding boxes
+        if (originalSize.x > 0 && originalSize.y > 0 && originalSize.z > 0) {
+          const originalMax = Math.max(originalSize.x, originalSize.y, originalSize.z);
+          // Scale to 1 grid unit (100mm)
+          const defaultScale = (1.0 / GRID_UNIT_SIZE_MM) / originalMax;
+          scaleX = scaleY = scaleZ = Math.max(0.0001, Math.min(20, defaultScale));
+        } else {
+          scaleX = scaleY = scaleZ = GLOBAL_SCALE_FACTOR;
+        }
       }
       
-      // Apply scaling
+      // Always apply scaling - the check above ensures we only do this when targetSize actually changes
+      // Apply scaling directly - each axis scales independently
       clonedScene.scale.set(scaleX, scaleY, scaleZ);
       
-      // Recenter at origin only once after initial scaling
-      if (!hasCenteredRef.current) {
-        const scaledBox = new THREE.Box3().setFromObject(clonedScene);
-        const scaledCenter = new THREE.Vector3();
-        scaledBox.getCenter(scaledCenter);
-        clonedScene.position.sub(scaledCenter);
-        hasCenteredRef.current = true;
+      // Calculate bounding box after scaling to find the bottom
+      const box = new THREE.Box3().setFromObject(clonedScene);
+      const minY = box.min.y;
+      
+      // Offset the model so its bottom is at Y=0 relative to parent group
+      // The parent group's Y position will be set to GRID_OFFSET to place it above grid
+      if (isFinite(minY)) {
+        clonedScene.position.y = -minY;
       }
+      
+      // DO NOT recenter the model horizontally - this causes the component to move after placement
+      // The model should maintain its original pivot point for X and Z
+      // Only adjust Y to align bottom with grid
+      // The parent group position handles the world-space positioning
     } catch (e) {
       // Silently handle scaling errors
     }
-  }, [clonedScene, targetSize?.[0], targetSize?.[1], targetSize?.[2]]);
+  }, [clonedScene, targetSize, category, url]); // Include url and category to detect component changes
+  
+  // Optimize mesh rendering
+  useEffect(() => {
+    if (!clonedScene) return;
+    
+    clonedScene.traverse((child) => {
+      if ((child as THREE.Mesh).isMesh) {
+        const mesh = child as THREE.Mesh;
+        // Enable frustum culling
+        mesh.frustumCulled = true;
+        // Optimize geometry
+        if (mesh.geometry) {
+          mesh.geometry.computeBoundingSphere();
+        }
+        // Optimize material
+        if (mesh.material) {
+          const material = mesh.material as THREE.MeshStandardMaterial;
+          material.shadowSide = THREE.FrontSide;
+        }
+      }
+    });
+  }, [clonedScene]);
   
   return (
     <primitive
       object={clonedScene}
+      frustumCulled={true}
       onClick={(e: any) => {
         e.stopPropagation();
         onSelect?.();
@@ -379,6 +669,8 @@ function GLBModel(props: {
   selected?: boolean;
   onSelect?: () => void;
   targetSize?: [number, number, number];
+  wireframe?: boolean;
+  category?: string;
 }) {
   const [loadError, setLoadError] = useState(false);
   
@@ -409,7 +701,7 @@ function GLBModel(props: {
         </mesh>
       }
     >
-      <GLBModelContent {...props} onLoadError={() => setLoadError(true)} />
+      <GLBModelContent {...props} category={props.category} onLoadError={() => setLoadError(true)} />
     </Suspense>
   );
 }
@@ -439,6 +731,12 @@ function ComponentPlaceholder({
     (bounding_box.max?.[2] || 1) - (bounding_box.min?.[2] || 0),
   ] : [1, 1, 1];
 
+  // Calculate Y offset to align bottom to Y=0 relative to parent
+  // The box geometry is centered, so we need to shift it up by half its height
+  // The parent group's Y position will be set to GRID_OFFSET to place it above grid
+  const height = size[1];
+  const yOffset = height / 2;
+
   // Use red color if processing failed
   // Check both processing_status and processing_error (some components might have error but status not set to 'failed')
   const isFailed = processing_status === 'failed' || (processing_error && processing_error.length > 0);
@@ -447,7 +745,7 @@ function ComponentPlaceholder({
 
   return (
     <mesh
-      position={position}
+      position={[position[0], position[1] + yOffset, position[2]]}
       onClick={(e: any) => {
         e.stopPropagation();
         onSelect?.();
@@ -482,6 +780,8 @@ function STLModelContent({ url, position, rotation, selected, onSelect }: {
   selected?: boolean;
   onSelect?: () => void;
 }) {
+  const meshRef = useRef<THREE.Mesh>(null);
+  
   try {
     const geometry = (useLoader as any)(STLLoader as any, url) as THREE.BufferGeometry;
     
@@ -489,20 +789,29 @@ function STLModelContent({ url, position, rotation, selected, onSelect }: {
       if (geometry) {
         try {
           geometry.computeVertexNormals();
-          geometry.center();
+          // Don't center - we'll align bottom to Y=0 relative to parent
+          // Calculate bounding box to find bottom
+          geometry.computeBoundingBox();
+          const box = geometry.boundingBox;
+          if (box) {
+            const minY = box.min.y;
+            // Offset geometry so bottom is at Y=0 relative to parent group
+            // The parent group's Y position will be set to GRID_OFFSET to place it above grid
+            geometry.translate(0, -minY, 0);
+          }
         } catch (e) {
-          console.error('Error processing STL geometry:', e);
+          // Silently handle STL processing errors
         }
       }
     }, [geometry]);
 
     if (!geometry) {
-      console.error(`Failed to load STL geometry from ${url}`);
       return null;
     }
 
     return (
       <mesh 
+        ref={meshRef}
         position={position} 
         rotation={rotation} 
         onClick={(e: any) => {
@@ -557,6 +866,26 @@ function OBJModelContent({ url, position, rotation, selected, onSelect }: {
   onSelect?: () => void;
 }) {
   const obj = (useLoader as any)(OBJLoader as any, url) as THREE.Group;
+  const groupRef = useRef<THREE.Group>(null);
+  
+  // Align OBJ model bottom to Y=0 relative to parent
+  useEffect(() => {
+    if (obj && groupRef.current) {
+      try {
+        // Calculate bounding box of the OBJ group
+        const box = new THREE.Box3().setFromObject(obj);
+        const minY = box.min.y;
+        
+        // Offset the group so bottom is at Y=0 relative to parent group
+        // The parent group's Y position will be set to GRID_OFFSET to place it above grid
+        if (isFinite(minY)) {
+          obj.position.y = -minY;
+        }
+      } catch (e) {
+        // Silently handle OBJ alignment errors
+      }
+    }
+  }, [obj]);
   
   // Apply selection highlighting to OBJ models
   useEffect(() => {
@@ -581,9 +910,10 @@ function OBJModelContent({ url, position, rotation, selected, onSelect }: {
   }, [selected, obj]);
   
   return (
-    <group position={position} rotation={rotation}>
-      <primitive 
-        object={obj} 
+    <group 
+      ref={groupRef}
+      position={position} 
+      rotation={rotation}
         onClick={(e: any) => {
           e.stopPropagation();
           onSelect?.();
@@ -595,7 +925,8 @@ function OBJModelContent({ url, position, rotation, selected, onSelect }: {
         onPointerOut={() => {
           document.body.style.cursor = 'default';
         }}
-      />
+    >
+      <primitive object={obj} />
     </group>
   );
 }
@@ -631,45 +962,368 @@ function TransformControlWrapper({
   const groupRef = useRef<THREE.Group>(null);
   const controlsRef = useRef<any>(null);
   const { gl, scene, camera } = useThree();
+  const isDraggingRef = useRef(false);
+  const [groupObject, setGroupObject] = useState<THREE.Group | null>(null);
   
-  // Update group position/rotation when component changes
+  // Set group object when ref is available
   useEffect(() => {
     if (groupRef.current) {
-      groupRef.current.position.set(...component.position);
-      groupRef.current.rotation.set(...(component.rotation || [0, 0, 0]));
+      setGroupObject(groupRef.current);
+    }
+  }, []);
+  
+  // Update group position/rotation when component changes (but not while dragging)
+  useEffect(() => {
+    if (groupRef.current && !isDraggingRef.current) {
+      // Ensure Y position is at least GRID_OFFSET above grid
+      const GRID_OFFSET = 0.1;
+      const constrainedY = Math.max(component.position[1], GRID_OFFSET);
+      
+      // Update group position and rotation to match component
+      groupRef.current.position.set(component.position[0], constrainedY, component.position[2]);
+        groupRef.current.rotation.set(...(component.rotation || [0, 0, 0]));
+      groupRef.current.updateMatrixWorld();
+      
+      // Update controls if they exist
+      if (controlsRef.current) {
+        controlsRef.current.updateMatrixWorld();
+      }
     }
   }, [component.position, component.rotation]);
   
+  // Track dragging state and enforce Y position constraint during drag
+  useEffect(() => {
+    if (!controlsRef.current || !groupRef.current) return;
+    
+    const controls = controlsRef.current;
+    const group = groupRef.current;
+    const GRID_OFFSET = 0.1;
+    
+    // Listen to transform controls events
+    const handleDraggingChanged = (e: any) => {
+      isDraggingRef.current = e.value;
+      
+      // When dragging ends, ensure final position is above grid
+      if (!e.value && group) {
+        if (group.position.y < GRID_OFFSET) {
+          group.position.y = GRID_OFFSET;
+          group.updateMatrixWorld();
+          controls.updateMatrixWorld();
+        }
+      }
+    };
+    
+    // Also enforce constraint during dragging (on every frame)
+    const handleObjectChange = () => {
+      if (isDraggingRef.current && group) {
+        if (group.position.y < GRID_OFFSET) {
+          group.position.y = GRID_OFFSET;
+          group.updateMatrixWorld();
+        }
+      }
+    };
+    
+    controls.addEventListener('dragging-changed', handleDraggingChanged);
+    controls.addEventListener('objectChange', handleObjectChange);
+    
+    return () => {
+      controls.removeEventListener('dragging-changed', handleDraggingChanged);
+      controls.removeEventListener('objectChange', handleObjectChange);
+    };
+  }, []);
+  
   // drei's TransformControls automatically coordinates with OrbitControls
-  // No need for manual coordination
+  // Use object prop to directly attach to the group
   
   return (
+    <>
+      <group 
+        ref={groupRef}
+        position={[
+          component.position[0],
+          Math.max(component.position[1], 0.1), // Ensure Y is at least GRID_OFFSET (0.1) above grid
+          component.position[2]
+        ]} 
+        rotation={component.rotation || [0, 0, 0]}
+      >
+        {children}
+      </group>
+      {groupObject && (
     <TransformControls
       ref={controlsRef}
+          object={groupObject}
       mode={transformMode}
       space="world"
       translationSnap={snap.translate}
       rotationSnap={snap.rotate}
       scaleSnap={snap.scale}
+      showX={true}
+      showY={true}
+      showZ={true}
       onObjectChange={(e) => {
-        const obj = (e as any).target?.object;
-        if (!obj || !groupRef.current) return;
+            const obj = groupRef.current;
+            if (!obj) return;
         
         // Get position and rotation from the group being controlled
-        const pos = [obj.position.x, obj.position.y, obj.position.z] as [number, number, number];
-        const rot = [obj.rotation.x, obj.rotation.y, obj.rotation.z] as [number, number, number];
+        const GRID_OFFSET = 0.1; // Ensure components stay above grid
+        
+        // Constrain Y position to be at least GRID_OFFSET above grid
+        // This prevents components from going below the grid during move/rotate
+        let yPos = obj.position.y;
+        if (yPos < GRID_OFFSET) {
+          yPos = GRID_OFFSET;
+          // Immediately update the object's position to enforce constraint
+          obj.position.y = GRID_OFFSET;
+          obj.updateMatrixWorld();
+        }
+        
+        // Apply snapping after constraint
+        yPos = Math.round(yPos / snap.translate) * snap.translate;
+        // Ensure snapped position is still above grid
+        if (yPos < GRID_OFFSET) {
+          yPos = GRID_OFFSET;
+        }
+        
+        const pos = [
+          Math.round(obj.position.x / snap.translate) * snap.translate,
+          yPos,
+          Math.round(obj.position.z / snap.translate) * snap.translate
+        ] as [number, number, number];
+        const rot = [
+          Math.round(obj.rotation.x / snap.rotate) * snap.rotate,
+          Math.round(obj.rotation.y / snap.rotate) * snap.rotate,
+          Math.round(obj.rotation.z / snap.rotate) * snap.rotate
+        ] as [number, number, number];
         onUpdate(pos, rot);
       }}
-    >
-      <group 
-        ref={groupRef}
-        position={component.position} 
-        rotation={component.rotation || [0, 0, 0]}
-      >
-        {children}
-      </group>
-    </TransformControls>
+        />
+      )}
+    </>
   );
+}
+
+// Component to expose camera controls via ref
+function CameraControlsExposer({ 
+  controlsRef, 
+  cameraRef, 
+  onControlsReady,
+  components,
+  viewMode,
+  selectedId,
+  onClearSelection
+}: { 
+  controlsRef: React.RefObject<any>; 
+  cameraRef: React.MutableRefObject<THREE.Camera | null>;
+  onControlsReady: (controls: SceneControls) => void;
+  components: SceneComponent[];
+  viewMode: 'focused' | 'shopfloor';
+  selectedId: string | null;
+  onClearSelection: () => void;
+}) {
+  const { camera, scene } = useThree();
+  
+  // Animation state for smooth camera movement
+  const isAnimatingRef = useRef(false);
+  const animationStartPos = useRef(new THREE.Vector3());
+  const animationEndPos = useRef(new THREE.Vector3());
+  const animationStartTarget = useRef(new THREE.Vector3());
+  const animationEndTarget = useRef(new THREE.Vector3());
+  const animationProgress = useRef(0);
+  
+  // Update camera ref when camera changes
+  useEffect(() => {
+    if (camera && cameraRef) {
+      cameraRef.current = camera;
+    }
+  }, [camera, cameraRef]);
+
+  // Smooth camera animation loop
+  useFrame((state, delta) => {
+    if (isAnimatingRef.current && controlsRef.current) {
+      animationProgress.current += delta * 2; // Animation speed (2 = ~0.5 seconds)
+      
+      if (animationProgress.current >= 1) {
+        // Animation complete
+        animationProgress.current = 1;
+        isAnimatingRef.current = false;
+      }
+      
+      // Ease out cubic for smooth deceleration
+      const eased = 1 - Math.pow(1 - animationProgress.current, 3);
+      
+      // Lerp camera position
+      const currentPos = new THREE.Vector3();
+      lerpVector3(animationStartPos.current, animationEndPos.current, eased, currentPos);
+      camera.position.copy(currentPos);
+      
+      // Lerp controls target
+      const currentTarget = new THREE.Vector3();
+      lerpVector3(animationStartTarget.current, animationEndTarget.current, eased, currentTarget);
+      controlsRef.current.target.copy(currentTarget);
+      
+      // Update controls and camera
+      controlsRef.current.update();
+      camera.updateProjectionMatrix();
+    }
+  });
+
+  const controls = useMemo<SceneControls>(() => ({
+    resetCamera: () => {
+      console.log('🎯 resetCamera called, components:', components.length);
+      
+      if (!controlsRef.current || !camera) {
+        console.warn('⚠️ Camera or controls not ready');
+        return;
+      }
+      
+      // Compute bounding box from actual scene objects (like proper CAD viewer)
+      const box = new THREE.Box3();
+      let hasObjects = false;
+      
+      // Traverse scene to find all visible meshes
+      scene.traverse((object) => {
+        // Skip helpers, lights, cameras, and the grid
+        if (object instanceof THREE.Mesh) {
+          const mesh = object as THREE.Mesh;
+          if (mesh.visible && 
+              !mesh.userData.isHelper &&
+              !mesh.userData.isGroundPlane &&
+              mesh.geometry) {
+            // Update world matrix to get correct world position
+            mesh.updateMatrixWorld(true);
+            
+            // Get bounding box in world space
+            const objectBox = new THREE.Box3().setFromObject(mesh);
+            if (!objectBox.isEmpty()) {
+              box.union(objectBox);
+              hasObjects = true;
+            }
+          }
+        }
+      });
+      
+      // If no objects found, use component positions as fallback
+      if (!hasObjects || box.isEmpty()) {
+        console.log('⚠️ No visible objects found, using component positions');
+        components.forEach(comp => {
+          const compPos = new THREE.Vector3(comp.position[0], comp.position[1], comp.position[2]);
+          box.expandByPoint(compPos);
+        });
+        
+        // If still empty, reset to default
+        if (box.isEmpty()) {
+          const defaultPos: [number, number, number] = viewMode === 'shopfloor' 
+            ? [40, 30, 40] 
+            : [15, 12, 15];
+          animationStartPos.current.copy(camera.position);
+          animationEndPos.current.set(...defaultPos);
+          animationStartTarget.current.copy(controlsRef.current.target);
+          animationEndTarget.current.set(0, 0, 0);
+          animationProgress.current = 0;
+          isAnimatingRef.current = true;
+          return;
+        }
+        
+        // Add padding for component positions
+        box.expandByScalar(2);
+      }
+      
+      const center = box.getCenter(new THREE.Vector3());
+      const size = box.getSize(new THREE.Vector3());
+      
+      console.log('📦 Scene bounding box center:', center, 'size:', size);
+      
+      // Calculate camera position to frame the scene (CAD viewer style)
+      // Position camera at an angle to show the scene nicely
+      const maxDim = Math.max(size.x, size.y, size.z, 1);
+      const margin = 1.2; // Reduced margin (20% instead of 50%) to prevent excessive zoom out
+      
+      // Calculate camera distance based on FOV to fit the scene
+      const fov = (camera as THREE.PerspectiveCamera).fov * (Math.PI / 180);
+      const distance = (maxDim * margin) / (2 * Math.tan(fov / 2));
+      
+      // Clamp distance to reasonable bounds - tighter bounds to prevent zooming out too much
+      const clampedDistance = Math.max(maxDim * 0.5, Math.min(distance, maxDim * 1.5, 100));
+      
+      // Position camera at an isometric-like angle
+      const angle = Math.PI / 4; // 45 degrees
+      const heightRatio = 0.6; // Slightly elevated view
+      
+      const newPosition = new THREE.Vector3(
+        center.x + clampedDistance * Math.cos(angle),
+        center.y + size.y * heightRatio + clampedDistance * 0.2,
+        center.z + clampedDistance * Math.cos(angle)
+      );
+      
+      console.log('📷 Target camera position:', newPosition);
+      console.log('📷 Target center:', center);
+      
+      // Start smooth animation
+      animationStartPos.current.copy(camera.position);
+      animationEndPos.current.copy(newPosition);
+      animationStartTarget.current.copy(controlsRef.current.target);
+      animationEndTarget.current.copy(center);
+      animationProgress.current = 0;
+      isAnimatingRef.current = true;
+      
+      // Also set immediately for instant feedback (animation will smooth it)
+      camera.lookAt(center);
+      controlsRef.current.target.copy(center);
+      controlsRef.current.update();
+    },
+    zoomIn: (factor = 1.2) => {
+      if (controlsRef.current && camera instanceof THREE.PerspectiveCamera) {
+        const distance = camera.position.distanceTo(controlsRef.current.target);
+        const newDistance = distance / factor;
+        const direction = new THREE.Vector3()
+          .subVectors(camera.position, controlsRef.current.target)
+          .normalize();
+        camera.position.copy(controlsRef.current.target.clone().add(direction.multiplyScalar(newDistance)));
+        camera.updateProjectionMatrix();
+        controlsRef.current.update();
+      }
+    },
+    zoomOut: (factor = 1.2) => {
+      if (controlsRef.current && camera instanceof THREE.PerspectiveCamera) {
+        const distance = camera.position.distanceTo(controlsRef.current.target);
+        const newDistance = distance * factor;
+        const clampedDistance = Math.min(newDistance, 200);
+        const direction = new THREE.Vector3()
+          .subVectors(camera.position, controlsRef.current.target)
+          .normalize();
+        camera.position.copy(controlsRef.current.target.clone().add(direction.multiplyScalar(clampedDistance)));
+        camera.updateProjectionMatrix();
+        controlsRef.current.update();
+      }
+    },
+    enablePanMode: () => {
+      if (controlsRef.current) {
+        controlsRef.current.enablePan = true;
+        controlsRef.current.enableRotate = false;
+        controlsRef.current.update();
+      }
+    },
+    disablePanMode: () => {
+      if (controlsRef.current) {
+        controlsRef.current.enablePan = true;
+        controlsRef.current.enableRotate = true;
+        controlsRef.current.update();
+      }
+    },
+    clearSelection: () => {
+      onClearSelection();
+    },
+    clearHighlights: () => {
+      // This can be extended to clear any visual highlights
+      onClearSelection();
+    }
+  }), [controlsRef, camera, components, viewMode, onClearSelection]);
+
+  useEffect(() => {
+    onControlsReady(controls);
+  }, [controls, onControlsReady]);
+
+  return null;
 }
 
 export const Scene = ({ 
@@ -679,12 +1333,15 @@ export const Scene = ({
   components = [],
   onAddComponent,
   onUpdateComponent,
-  activeTool = 'select'
+  activeTool = 'select',
+  controlsRef: externalControlsRef,
+  sceneSettings
 }: SceneProps) => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [snap, setSnap] = useState({ translate: 0.5, rotate: Math.PI / 12, scale: 0.1 });
+  // Reduced snap values for easier, more precise movement
+  const [snap, setSnap] = useState({ translate: 0.1, rotate: Math.PI / 24, scale: 0.05 });
   
   // Map activeTool to transform mode
   const transformMode: 'translate' | 'rotate' | 'scale' = 
@@ -693,10 +1350,9 @@ export const Scene = ({
     activeTool === 'scale' ? 'scale' : 'translate';
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
+    // Don't prevent default or stop propagation here - let it bubble
     if (!dragOver) {
-      console.log('Drag over detected, setting dragOver to true');
+      console.log('🎯 Drag over detected, setting dragOver to true');
       setDragOver(true);
     }
     // Set drop effect to show it's a valid drop target
@@ -706,20 +1362,32 @@ export const Scene = ({
   }, [dragOver]);
 
   const handleDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragOver(false);
+    // Only set dragOver to false if we're actually leaving the container
+    // Check if we're leaving to a child element
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (rect) {
+      const x = e.clientX;
+      const y = e.clientY;
+      if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
+        console.log('🎯 Drag left container, setting dragOver to false');
+        setDragOver(false);
+      }
+    } else {
+      setDragOver(false);
+    }
   }, []);
 
   // Store camera and gl references for raycasting
   const cameraRef = useRef<THREE.Camera | null>(null);
   const glRef = useRef<THREE.WebGLRenderer | null>(null);
   const raycasterRef = useRef(new THREE.Raycaster());
+  const [cameraState, setCameraState] = useState<{ camera: THREE.Camera | null; controls: any }>({ 
+    camera: null, 
+    controls: null 
+  });
 
   const handleDrop = useCallback((e: React.DragEvent) => {
-    console.log('🎯 Drop event received in handleDrop!');
-    console.log('🎯 Event target:', e.target);
-    console.log('🎯 Event currentTarget:', e.currentTarget);
+    
     e.preventDefault();
     e.stopPropagation();
     setDragOver(false);
@@ -730,22 +1398,17 @@ export const Scene = ({
       
       // Fallback to text/plain if application/json is empty
       if (!data) {
-        console.log('No application/json data, trying text/plain...');
         data = e.dataTransfer.getData('text/plain');
       }
       
       if (!data) {
-        console.warn('No drag data found in either format');
-        console.log('Available types:', e.dataTransfer.types);
         return;
       }
 
       const component = JSON.parse(data);
-      console.log('Dropped component:', component);
       
       // Validate required fields
       if (!component.id && !component.componentId) {
-        console.error('Component missing ID:', component);
         return;
       }
 
@@ -753,67 +1416,180 @@ export const Scene = ({
       if (containerRef.current && onAddComponent) {
         const rect = containerRef.current.getBoundingClientRect();
         
-        let position: [number, number, number];
+        // Initialize position with a default value to ensure it's always set
+        let position: [number, number, number] = [0, 0, 0];
         
         // Use raycasting if camera is available
         if (cameraRef.current && glRef.current) {
-          // Ensure camera projection matrix is up to date
-          if (cameraRef.current instanceof THREE.PerspectiveCamera) {
-            cameraRef.current.updateProjectionMatrix();
-          }
-          
-          // Convert screen coordinates to normalized device coordinates
-          const mouse = new THREE.Vector2();
-          mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-          mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+          try {
+            // Ensure camera projection matrix is up to date
+            if (cameraRef.current instanceof THREE.PerspectiveCamera) {
+              cameraRef.current.updateProjectionMatrix();
+            }
+            
+            // Convert screen coordinates to normalized device coordinates (NDC)
+            const mouse = new THREE.Vector2();
+            mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+            mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+            
+            console.log('🎯 Raycasting - mouse NDC:', mouse, 'rect:', rect);
 
-          console.log('Raycasting with mouse:', mouse, 'camera position:', cameraRef.current.position, 'camera FOV:', (cameraRef.current as THREE.PerspectiveCamera).fov);
-
-          // Raycast against ground plane (y = 0)
-          raycasterRef.current.setFromCamera(mouse, cameraRef.current);
-          const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
-          const intersectionPoint = new THREE.Vector3();
-          
-          const intersects = raycasterRef.current.ray.intersectPlane(groundPlane, intersectionPoint);
-
-          if (intersects && intersectionPoint && !isNaN(intersectionPoint.x) && !isNaN(intersectionPoint.y) && !isNaN(intersectionPoint.z)) {
-            // Ensure Y is exactly 0 (ground plane)
-            position = [intersectionPoint.x, 0, intersectionPoint.z];
-            console.log('Using raycast position:', position);
-          } else {
-            // Fallback to simple calculation
+            // Create raycaster and set from camera
+            const raycaster = new THREE.Raycaster();
+            raycaster.setFromCamera(mouse, cameraRef.current);
+            
+            // Method 1: Try to intersect with actual ground plane mesh in scene
+            // This is more accurate than mathematical plane intersection
+            const groundPlaneMesh = glRef.current?.domElement?.parentElement?.querySelector('mesh[data-ground-plane]');
+            
+            // Use mathematical plane as primary method (more reliable)
+            // Offset plane slightly above grid (0.1 units) so components sit above grid lines
+            const GRID_OFFSET = 0.1;
+            const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -GRID_OFFSET);
+            const intersectionPoint = new THREE.Vector3();
+            const distance = raycaster.ray.intersectPlane(groundPlane, intersectionPoint);
+            
+            if (distance !== null && distance > 0 && 
+                !isNaN(intersectionPoint.x) && !isNaN(intersectionPoint.y) && !isNaN(intersectionPoint.z) &&
+                isFinite(intersectionPoint.x) && isFinite(intersectionPoint.y) && isFinite(intersectionPoint.z)) {
+              // Valid intersection with ground plane (above grid)
+              // Always use GRID_OFFSET for Y position to ensure components spawn on grid
+              position = [
+                Math.round(intersectionPoint.x * 100) / 100,
+                GRID_OFFSET, // Always place at GRID_OFFSET above grid
+                Math.round(intersectionPoint.z * 100) / 100
+              ];
+            } else {
+              // Fallback: Calculate intersection manually
+              // Project ray onto plane above grid (y = GRID_OFFSET)
+              const GRID_OFFSET = 0.1;
+              const ray = raycaster.ray;
+              const rayDirY = ray.direction.y;
+              
+              if (Math.abs(rayDirY) > 0.0001) {
+                // Ray is not parallel to ground
+                const t = (GRID_OFFSET - ray.origin.y) / rayDirY;
+                if (t > 0 && isFinite(t) && !isNaN(t)) {
+                  const point = ray.origin.clone().add(ray.direction.clone().multiplyScalar(t));
+                  position = [
+                    Math.round(point.x * 100) / 100,
+                    GRID_OFFSET, // Always place at GRID_OFFSET above grid
+                    Math.round(point.z * 100) / 100
+                  ];
+                } else {
+                  // Invalid intersection, use camera forward projection
+                  console.warn('⚠️ Invalid ray intersection, using camera forward projection');
+                  const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraRef.current.quaternion);
+                  const GRID_OFFSET = 0.1;
+                  const projected = cameraRef.current.position.clone().add(forward.multiplyScalar(10));
+                  position = [
+                    Math.round(projected.x * 100) / 100,
+                    GRID_OFFSET, // Place above grid
+                    Math.round(projected.z * 100) / 100
+                  ];
+                }
+              } else {
+                // Ray is parallel to ground, project forward from camera
+                console.warn('⚠️ Ray parallel to ground, using camera forward projection');
+                const GRID_OFFSET = 0.1;
+                const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraRef.current.quaternion);
+                const projected = cameraRef.current.position.clone().add(forward.multiplyScalar(10));
+                position = [
+                  Math.round(projected.x * 100) / 100,
+                  GRID_OFFSET, // Place above grid
+                  Math.round(projected.z * 100) / 100
+                ];
+              }
+            }
+          } catch (raycastError) {
+            console.error('Error during raycasting, using fallback:', raycastError);
+            // Fallback to simple calculation on any error
+            const GRID_OFFSET = 0.1;
             const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
             const ndcY = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
-            position = [ndcX * 10, 0, -ndcY * 10];
-            console.log('Using fallback position (raycast failed):', position, 'intersects:', intersects);
+            position = [ndcX * 10, GRID_OFFSET, -ndcY * 10];
           }
         } else {
           // Fallback to simple calculation if camera not available
+          const GRID_OFFSET = 0.1;
           const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
           const ndcY = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
-          position = [ndcX * 10, 0, -ndcY * 10];
-          console.log('Using simple position (camera not ready):', position, {
+          position = [ndcX * 10, GRID_OFFSET, -ndcY * 10];
+          console.log('⚠️ Using simple position (camera not ready):', position, {
             hasCamera: !!cameraRef.current,
             hasGL: !!glRef.current
           });
         }
 
+        // Account for component center offset if provided
+        // The component will be centered at [0,0,0] in local space, so we use the drop position directly
+        // The center property is used for scaling/positioning calculations, not for offset
+        const finalPosition = position;
+        
+        // Normalize bounding_box format if provided
+        let normalizedBoundingBox = component.bounding_box || null;
+        if (normalizedBoundingBox) {
+          // Check if it's in the correct format {min: [x,y,z], max: [x,y,z]}
+          if (normalizedBoundingBox.min && normalizedBoundingBox.max && 
+              Array.isArray(normalizedBoundingBox.min) && Array.isArray(normalizedBoundingBox.max)) {
+            // Format is correct, use as-is
+          } else if (normalizedBoundingBox.x && normalizedBoundingBox.y && normalizedBoundingBox.z) {
+            // Convert from {x: {min, max}, y: {min, max}, z: {min, max}} format
+            normalizedBoundingBox = {
+              min: [normalizedBoundingBox.x.min || 0, normalizedBoundingBox.y.min || 0, normalizedBoundingBox.z.min || 0],
+              max: [normalizedBoundingBox.x.max || 0, normalizedBoundingBox.y.max || 0, normalizedBoundingBox.z.max || 0],
+            };
+          } else {
+            // Invalid format, treat as missing
+            normalizedBoundingBox = null;
+          }
+        }
+        
+        // If bounding_box is still missing or invalid, create a default one based on component type
+        if (!normalizedBoundingBox || !normalizedBoundingBox.min || !normalizedBoundingBox.max) {
+          const isConveyor = (component.category || '').toLowerCase().includes('belt') || 
+                            (component.category || '').toLowerCase().includes('conveyor');
+          
+          if (isConveyor) {
+            // Default conveyor dimensions: 1000mm length, 500mm width, 300mm height
+            // For conveyors: X=width, Y=height, Z=length in world space
+            // But in bounding_box: [0]=width, [1]=height, [2]=length
+            const defaultLength = 1000;  // Total length (D)
+            const defaultWidth = 500;    // Conveyor width (R)
+            const defaultHeight = 300;   // Height
+            
+            normalizedBoundingBox = {
+              min: [-defaultWidth / 2, 0, -defaultLength / 2],
+              max: [defaultWidth / 2, defaultHeight, defaultLength / 2],
+            };
+          } else {
+            // Default dimensions for other components
+            const defaultSize = 450;
+            normalizedBoundingBox = {
+              min: [-defaultSize / 2, -defaultSize / 2, -defaultSize / 2],
+              max: [defaultSize / 2, defaultSize / 2, defaultSize / 2],
+            };
+          }
+        }
+        
         const componentToAdd = {
           componentId: component.id || component.componentId,
           name: component.name || 'Unnamed Component',
           category: component.category || 'unknown',
           glb_url: component.glb_url || null,
           original_url: component.original_url || null,
-          bounding_box: component.bounding_box || null,
+          bounding_box: normalizedBoundingBox,
           center: component.center || [0, 0, 0],
-          position,
+          position: finalPosition,
           rotation: [0, 0, 0] as [number, number, number],
         };
         
-        console.log('Adding component to scene:', componentToAdd);
-        onAddComponent(componentToAdd);
+        
+        if (onAddComponent) {
+          onAddComponent(componentToAdd);
+        }
       } else {
-        console.warn('Container ref or onAddComponent not available', {
+        console.error('❌ Container ref or onAddComponent not available', {
           hasContainerRef: !!containerRef.current,
           hasOnAddComponent: !!onAddComponent
         });
@@ -828,40 +1604,142 @@ export const Scene = ({
     onSelectComponent(id);
   };
 
+  const handleClearSelection = useCallback(() => {
+    setSelectedId(null);
+    onSelectComponent('');
+  }, [onSelectComponent]);
+
   const cameraPosition: [number, number, number] = viewMode === 'shopfloor' 
     ? [40, 30, 40] 
     : [15, 12, 15];
     
   const controlsRef = useRef<any>();
+  const internalControlsRef = useRef<SceneControls | null>(null);
+
+  // Expose controls to parent via ref
+  useEffect(() => {
+    if (externalControlsRef && internalControlsRef.current) {
+      externalControlsRef.current = internalControlsRef.current;
+    }
+  }, [externalControlsRef, internalControlsRef.current]);
 
   return (
     <div 
       ref={containerRef}
-      className={`w-full h-full bg-background rounded-lg overflow-hidden border border-border transition-colors ${dragOver ? 'border-primary bg-primary/5' : ''}`}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
+      className={`w-full h-full bg-background rounded-lg overflow-hidden border border-border transition-colors ${dragOver ? 'border-primary bg-primary/5' : ''} ${activeTool === 'pan' ? 'cursor-grab active:cursor-grabbing' : ''}`}
+      onDragOver={(e) => {
+        e.preventDefault(); // Required to allow drop
+        handleDragOver(e);
+      }}
+      onDragLeave={(e) => {
+        handleDragLeave(e);
+      }}
+      onDrop={(e) => {
+        console.log('🎯 Container div onDrop handler called');
+        e.preventDefault();
+        e.stopPropagation();
+        console.log('🎯 Calling handleDrop...');
+        handleDrop(e);
+      }}
       style={{ position: 'relative' }}
     >
-      {/* Camera fit button */}
-      <button
-        onClick={() => {
-          if ((window as any).fitCameraToScene) {
-            (window as any).fitCameraToScene();
-          }
-        }}
-        className="absolute top-4 right-4 z-10 bg-primary/80 hover:bg-primary text-primary-foreground px-3 py-2 rounded-md text-sm font-medium backdrop-blur-sm transition-colors"
-        title="Fit camera to all components"
-      >
-        Fit View
-      </button>
+      {/* FPS Counter */}
+      {sceneSettings?.fpsCounter && (
+        <FPSCounter enabled={sceneSettings.fpsCounter} />
+      )}
+      
+      {/* Camera Preview Cube */}
+      {sceneSettings?.cameraCube && (
+        <CameraPreviewCube
+          onFaceClick={(face) => {
+            if (!cameraRef.current || !controlsRef.current) return;
+            
+            const target = controlsRef.current.target.clone();
+            const distance = cameraRef.current.position.distanceTo(target);
+            
+            // Define camera positions for each face
+            const positions: Record<string, THREE.Vector3> = {
+              front: new THREE.Vector3(target.x, target.y, target.z + distance),
+              back: new THREE.Vector3(target.x, target.y, target.z - distance),
+              right: new THREE.Vector3(target.x + distance, target.y, target.z),
+              left: new THREE.Vector3(target.x - distance, target.y, target.z),
+              top: new THREE.Vector3(target.x, target.y + distance, target.z),
+              bottom: new THREE.Vector3(target.x, target.y - distance, target.z),
+            };
+            
+            const newPosition = positions[face];
+            if (newPosition && cameraRef.current) {
+              // Smoothly animate camera to new position
+              const startPos = cameraRef.current.position.clone();
+              const startTarget = target.clone();
+              const duration = 500; // ms
+              const startTime = performance.now();
+              
+              const animate = () => {
+                const elapsed = performance.now() - startTime;
+                const progress = Math.min(elapsed / duration, 1);
+                const eased = 1 - Math.pow(1 - progress, 3); // Ease out cubic
+                
+                const currentPos = startPos.clone().lerp(newPosition, eased);
+                cameraRef.current!.position.copy(currentPos);
+                cameraRef.current!.lookAt(target);
+                
+                if (controlsRef.current) {
+                  controlsRef.current.target.copy(target);
+                  controlsRef.current.update();
+                }
+                
+                if (progress < 1) {
+                  requestAnimationFrame(animate);
+                }
+              };
+              
+              animate();
+            }
+          }}
+          mainCamera={cameraState.camera}
+          mainControls={cameraState.controls}
+        />
+      )}
+      
       <Canvas 
-        shadows
-        style={{ display: 'block', width: '100%', height: '100%', pointerEvents: dragOver ? 'none' : 'auto' }}
-        onCreated={({ camera, gl }) => {
+        shadows={sceneSettings?.shadows ?? true}
+        gl={{ 
+          antialias: false, // Disable antialiasing for better performance
+          powerPreference: "high-performance",
+          stencil: false,
+          depth: true,
+          alpha: false, // Disable alpha for better performance
+          premultipliedAlpha: false
+        }}
+        dpr={[1, 1.2]} // Limit pixel ratio for better performance
+        performance={{ min: 0.2 }} // Lower performance threshold
+        style={{ 
+          display: 'block', 
+          width: '100%', 
+          height: '100%', 
+          pointerEvents: dragOver ? 'none' : 'auto',
+          position: 'relative',
+          zIndex: dragOver ? 0 : 1,
+          cursor: activeTool === 'pan' ? 'grab' : 'default'
+        }}
+        onCreated={({ camera, gl, scene }) => {
           // Update camera and gl refs when Canvas is created/updated
           cameraRef.current = camera;
           glRef.current = gl;
+          
+          // Performance optimizations
+          gl.setPixelRatio(Math.min(window.devicePixelRatio, 1.5)); // Limit pixel ratio
+          gl.shadowMap.enabled = true;
+          gl.shadowMap.type = THREE.PCFSoftShadowMap;
+          
+          // Enable frustum culling
+          scene.traverse((object) => {
+            if (object instanceof THREE.Mesh) {
+              object.frustumCulled = true;
+            }
+          });
+          
           console.log('Canvas created, camera and gl refs set');
         }}
         onPointerMissed={(e) => {
@@ -872,21 +1750,22 @@ export const Scene = ({
           }
         }}
         onDragOver={(e) => {
-          // Allow drag over on canvas - prevent default but don't stop propagation
+          // Allow drag over on canvas - prevent default to allow drop
+          // Don't stop propagation so container can also handle it
           e.preventDefault();
         }}
         onDrop={(e) => {
-          // Handle drop on Canvas - forward to container handler
-          console.log('Canvas drop event received');
+          // Prevent canvas from handling drop - let container handle it
+          console.log('🎯 Canvas onDrop - preventing default and stopping propagation');
           e.preventDefault();
           e.stopPropagation();
-          handleDrop(e as any);
+          // Don't call handleDrop here - let the container div handle it
         }}
       >
         <PerspectiveCamera makeDefault position={cameraPosition} fov={50} />
         <OrbitControls 
           ref={controlsRef}
-          enablePan={activeTool === 'select'}
+          enablePan={activeTool === 'select' || activeTool === 'pan'}
           enableZoom={true}
           enableRotate={activeTool === 'select'}
           minDistance={5}
@@ -899,6 +1778,29 @@ export const Scene = ({
             cameraRef.current = camera;
             glRef.current = gl;
           }}
+        />
+        
+        {/* Expose camera controls */}
+        <CameraControlsExposer
+          controlsRef={controlsRef}
+          cameraRef={cameraRef}
+          onControlsReady={(controls) => {
+            internalControlsRef.current = controls;
+            if (externalControlsRef) {
+              externalControlsRef.current = controls;
+            }
+          }}
+          components={components}
+          viewMode={viewMode}
+          selectedId={selectedId}
+          onClearSelection={handleClearSelection}
+        />
+        
+        {/* Update camera state for preview cube */}
+        <CameraStateUpdater
+          cameraRef={cameraRef}
+          controlsRef={controlsRef}
+          onUpdate={(camera, controls) => setCameraState({ camera, controls })}
         />
         
         {/* Auto-fit camera to all components */}
@@ -920,7 +1822,7 @@ export const Scene = ({
         <Environment preset="warehouse" />
 
         {/* Grid floor */}
-        {showGrid && (
+        {(sceneSettings?.grid ?? showGrid) && (
           <Grid 
             args={viewMode === 'shopfloor' ? [100, 100] : [50, 50]}
             cellSize={1}
@@ -936,9 +1838,29 @@ export const Scene = ({
           />
         )}
 
-        {/* Floor plane for shadows */}
-        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.01, 0]} receiveShadow>
-          <planeGeometry args={[100, 100]} />
+        {/* Coordinate System Helper */}
+        {sceneSettings?.coordinateSystem && (
+          <axesHelper args={[5]} />
+        )}
+        
+        {/* Camera Cube Gizmo */}
+        {sceneSettings?.cameraCube && (
+          <GizmoHelper
+            alignment="bottom-right"
+            margin={[80, 80]}
+          >
+            <GizmoViewport labelColor="white" axisHeadScale={1} />
+          </GizmoHelper>
+        )}
+
+        {/* Floor plane for shadows and raycasting */}
+        <mesh 
+          rotation={[-Math.PI / 2, 0, 0]} 
+          position={[0, 0, 0]} 
+          receiveShadow
+          userData={{ isGroundPlane: true }}
+        >
+          <planeGeometry args={[1000, 1000]} />
           <shadowMaterial transparent opacity={0.3} />
         </mesh>
 
@@ -964,41 +1886,53 @@ export const Scene = ({
           if (shouldUseGLB) {
             // GLBModel will be positioned by the wrapping group, so pass [0,0,0]
             // Compute desired size from bounding_box if available
-            // Convert from mm to scene units (1 scene unit = 1mm, so no conversion needed)
-            // But ensure we're using absolute values and reasonable sizes
-            const targetSize: [number, number, number] | undefined = comp.bounding_box ? (() => {
-              const width = Math.abs((comp.bounding_box.max?.[0] || 0) - (comp.bounding_box.min?.[0] || 0));
-              const height = Math.abs((comp.bounding_box.max?.[1] || 0) - (comp.bounding_box.min?.[1] || 0));
-              const length = Math.abs((comp.bounding_box.max?.[2] || 0) - (comp.bounding_box.min?.[2] || 0));
+            // Calculate targetSize from bounding_box (stable calculation)
+            let targetSize: [number, number, number];
+            if (comp.bounding_box && comp.bounding_box.min && comp.bounding_box.max) {
+              const width = Math.abs((comp.bounding_box.max[0] || 0) - (comp.bounding_box.min[0] || 0));
+              const height = Math.abs((comp.bounding_box.max[1] || 0) - (comp.bounding_box.min[1] || 0));
+              const length = Math.abs((comp.bounding_box.max[2] || 0) - (comp.bounding_box.min[2] || 0));
               
-              // Validate dimensions are reasonable (in mm)
-              // For STEP files, dimensions can be large but should be reasonable
-              // Allow up to 5000mm (5 meters) for large components
+              // Round to 1 decimal place to ensure stability
+              const roundTo1Decimal = (val: number) => Math.round(val * 10) / 10;
               
-              // Ensure minimum size of 1mm
-              return [
-                Math.max(width, 1),
-                Math.max(height, 1),
-                Math.max(length, 1)
-              ];
-            })() : undefined;
+              targetSize = [
+                Math.max(roundTo1Decimal(width), 1),
+                Math.max(roundTo1Decimal(height), 1),
+                Math.max(roundTo1Decimal(length), 1)
+              ] as [number, number, number];
+            } else {
+              // No bounding_box available - use defaults based on component type
+              const isConveyor = (comp.category || '').toLowerCase().includes('belt') || 
+                                (comp.category || '').toLowerCase().includes('conveyor');
+              
+              if (isConveyor) {
+                targetSize = [500, 300, 1000] as [number, number, number]; // [width, height, length]
+              } else {
+                targetSize = [450, 450, 450] as [number, number, number];
+              }
+            }
+            
 
             content = (
               <GLBModel
+                key={`${comp.id}-${targetSize[0]}-${targetSize[1]}-${targetSize[2]}`} // Include targetSize in key to force remount when dimensions change
                 url={glbUrl!}
                 position={[0, 0, 0]}
                 rotation={[0, 0, 0]}
                 selected={selectedId === comp.id}
                 onSelect={() => handleSelect(comp.id)}
                 targetSize={targetSize}
+                wireframe={sceneSettings?.viewMode === 'wireframe'}
+                category={comp.category}
               />
             );
           } else if (originalUrl && isSTL) {
             content = (
               <STLModel
                 url={originalUrl}
-                position={comp.position}
-                rotation={comp.rotation || [0, 0, 0]}
+                position={[0, 0, 0]} // Position handled by parent group
+                rotation={[0, 0, 0]} // Rotation handled by parent group
                 selected={selectedId === comp.id}
                 onSelect={() => handleSelect(comp.id)}
               />
@@ -1007,8 +1941,8 @@ export const Scene = ({
             content = (
               <OBJModel
                 url={originalUrl}
-                position={comp.position}
-                rotation={comp.rotation || [0, 0, 0]}
+                position={[0, 0, 0]} // Position handled by parent group
+                rotation={[0, 0, 0]} // Rotation handled by parent group
                 selected={selectedId === comp.id}
                 onSelect={() => handleSelect(comp.id)}
               />
@@ -1017,7 +1951,7 @@ export const Scene = ({
             // STEP files need conversion - if no GLB, show placeholder with helpful message
             content = (
               <ComponentPlaceholder
-                position={comp.position}
+                position={[0, 0, 0]} // Position handled by parent group
                 bounding_box={comp.bounding_box}
                 category={comp.category}
                 selected={selectedId === comp.id}
@@ -1031,7 +1965,7 @@ export const Scene = ({
             // This includes components without GLB (failed processing, missing files, etc.)
             content = (
               <ComponentPlaceholder
-                position={comp.position}
+                position={[0, 0, 0]} // Position handled by parent group
                 bounding_box={comp.bounding_box}
                 category={comp.category}
                 selected={selectedId === comp.id}
@@ -1073,8 +2007,15 @@ export const Scene = ({
           }
 
           // Return the component group directly (no transform controls)
+          // Always ensure Y position is at least GRID_OFFSET above grid
+          const GRID_OFFSET = 0.1;
+          const constrainedY = Math.max(comp.position[1], GRID_OFFSET);
           return (
-            <group key={key} position={comp.position} rotation={comp.rotation || [0, 0, 0]}>
+            <group 
+              key={key} 
+              position={[comp.position[0], constrainedY, comp.position[2]]} 
+              rotation={comp.rotation || [0, 0, 0]}
+            >
               {content}
             </group>
           );

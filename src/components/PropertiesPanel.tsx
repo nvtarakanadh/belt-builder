@@ -11,7 +11,6 @@ import { ConveyorComponent } from "@/types/conveyor";
 import { AdjustDimensions } from "@/components/AdjustDimensions";
 import { useState, useEffect } from "react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
-import { ComponentPreview } from "@/components/ComponentPreview";
 
 interface PropertiesPanelProps {
   selectedComponent: ConveyorComponent | null;
@@ -281,12 +280,6 @@ export const PropertiesPanel = ({ selectedComponent, onUpdateComponent, onDelete
             </p>
           </div>
         )}
-      </div>
-
-      {/* Component Preview */}
-      <div className="p-4 border-b border-border">
-        <Label className="text-sm font-semibold mb-2 block">Preview</Label>
-        <ComponentPreview component={selectedComponent} />
       </div>
 
       {/* Conveyor Type Selection - At the top for belt components */}

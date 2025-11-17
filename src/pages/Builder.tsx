@@ -4,7 +4,9 @@ import { Toolbar } from '@/components/Toolbar';
 import { ComponentLibrary } from '@/components/ComponentLibrary';
 import { PropertiesPanel } from '@/components/PropertiesPanel';
 import { BOMPanel } from '@/components/BOMPanel';
-import { Scene } from '@/components/3d/Scene';
+import { Scene, SceneControls } from '@/components/3d/Scene';
+import { SettingsDialog } from '@/components/SettingsDialog';
+import { SettingsPanel, SceneSettings, DEFAULT_SETTINGS as DEFAULT_SCENE_SETTINGS } from '@/components/3d/SettingsPanel';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -48,6 +50,7 @@ const Builder = () => {
   );
   const hasLoadedRef = useRef(false); // Track if initial load has happened
   const isLoadingRef = useRef(false); // Prevent concurrent loads
+  const loadedProjectIdRef = useRef<number | null>(null); // Track which project was loaded
   const isAddingComponentRef = useRef(false); // Prevent concurrent component additions
   const addedComponentIdsRef = useRef<Set<string>>(new Set()); // Track added component IDs
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
@@ -58,6 +61,17 @@ const Builder = () => {
   const [history, setHistory] = useState<SceneComponent[][]>([[]]);
   const [historyIndex, setHistoryIndex] = useState(0);
   const isUndoRedoRef = useRef(false); // Prevent adding to history during undo/redo
+
+  // Scene controls ref
+  const sceneControlsRef = useRef<SceneControls | null>(null);
+  
+  // Settings dialog state
+  const [showSettings, setShowSettings] = useState(false);
+  const [panModeActive, setPanModeActive] = useState(false);
+  
+  // 3D Settings panel state
+  const [showSettingsPanel, setShowSettingsPanel] = useState(false);
+  const [sceneSettings, setSceneSettings] = useState<SceneSettings>(DEFAULT_SCENE_SETTINGS);
 
   const API_BASE = (import.meta as any).env?.VITE_API_BASE || "http://localhost:8000";
 
@@ -96,37 +110,91 @@ const Builder = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sceneComponents]);
 
-  // Load project assembly on mount (only once)
+  // Load project assembly on mount or when ID changes
   useEffect(() => {
+    // Reset load state if project ID changed or if we haven't loaded this project yet
+    if (id && id !== 'demo') {
+      const urlProjectId = parseInt(id, 10);
+      if (!isNaN(urlProjectId)) {
+        // If project ID changed, reset load state
+        if (urlProjectId !== loadedProjectIdRef.current) {
+          console.log('🔄 Project ID changed or not loaded yet, resetting load state', {
+            urlProjectId,
+            loadedProjectId: loadedProjectIdRef.current
+          });
+          hasLoadedRef.current = false;
+          isLoadingRef.current = false;
+          setCurrentProjectId(urlProjectId);
+        }
+      }
+    }
+    
     if (hasLoadedRef.current || isLoadingRef.current) {
-      console.log('⏭️ Skipping load - already loaded or loading');
+      console.log('⏭️ Skipping load - already loaded or loading', {
+        hasLoaded: hasLoadedRef.current,
+        isLoading: isLoadingRef.current,
+        currentProjectId,
+        loadedProjectId: loadedProjectIdRef.current,
+        urlId: id
+      });
       return; // Already loaded or currently loading
     }
     
     const loadProject = async () => {
       console.log('🔄 Starting project load...');
+      console.log('📍 URL project ID:', id);
       isLoadingRef.current = true;
       try {
-        console.log('Loading project...');
-        // Create or get default project
-        const projectRes = await fetch(`${API_BASE}/api/projects/`, {
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-        });
+        let project;
         
-        if (!projectRes.ok) {
-          console.error('Failed to fetch projects:', projectRes.status, projectRes.statusText);
-          return;
+        // If we have a project ID from URL, load that specific project
+        const urlProjectId = id && id !== 'demo' ? parseInt(id, 10) : null;
+        if (urlProjectId && !isNaN(urlProjectId)) {
+          console.log('Loading specific project from URL:', urlProjectId);
+          const projectRes = await fetch(`${API_BASE}/api/projects/${urlProjectId}/`, {
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+          });
+          
+          if (projectRes.ok) {
+            project = await projectRes.json();
+            console.log('✅ Loaded project from URL:', project.id, project.name);
+            setCurrentProjectId(project.id);
+          } else {
+            console.error('Failed to load project from URL:', projectRes.status);
+            // Fall through to try loading from list or create new
+          }
         }
         
-        const projects = await projectRes.json();
-        const results = Array.isArray(projects) ? projects : projects.results || [];
-        console.log('Projects loaded:', results.length);
+        // If no project loaded yet, try to get first project or create new one
+        if (!project) {
+          console.log('Loading projects list...');
+          const projectRes = await fetch(`${API_BASE}/api/projects/`, {
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+          });
+          
+          if (!projectRes.ok) {
+            console.error('Failed to fetch projects:', projectRes.status, projectRes.statusText);
+            return;
+          }
+          
+          const projects = await projectRes.json();
+          const results = Array.isArray(projects) ? projects : projects.results || [];
+          console.log('Projects loaded:', results.length);
+          
+          if (results.length > 0) {
+            project = results[0];
+            console.log('Using first project:', project.id, project.name);
+            setCurrentProjectId(project.id);
+          }
+        }
         
-        if (results.length > 0) {
-          const project = results[0];
-          console.log('Using project:', project.id, project.name);
-          setCurrentProjectId(project.id);
+        if (project) {
+          // Ensure currentProjectId is set
+          if (!currentProjectId) {
+            setCurrentProjectId(project.id);
+          }
           
           // Load assembly items
           const itemsRes = await fetch(`${API_BASE}/api/assembly-items/?project_id=${project.id}`, {
@@ -248,21 +316,20 @@ const Builder = () => {
           console.log('Component IDs:', finalUniqueComponents.map(c => c.id));
           console.log('Component names:', finalUniqueComponents.map(c => c.name));
           
-          // Only set components if we haven't loaded yet
-          if (!hasLoadedRef.current) {
-            setSceneComponents(finalUniqueComponents);
-            // Initialize history with loaded components
-            setHistory([finalUniqueComponents]);
-            setHistoryIndex(0);
-            prevComponentsRef.current = JSON.stringify(finalUniqueComponents.map(c => ({ id: c.id, position: c.position, rotation: c.rotation })));
-            // Track all loaded component IDs
-            addedComponentIdsRef.current = new Set(finalUniqueComponents.map(c => c.id));
-            hasLoadedRef.current = true;
-            console.log('✅ Project loaded successfully');
-            console.log('✅ Tracked component IDs:', Array.from(addedComponentIdsRef.current));
-          } else {
-            console.warn('⚠️ Attempted to load components but already loaded - skipping');
-          }
+          // Always set components when loading (even if empty array)
+          setSceneComponents(finalUniqueComponents);
+          // Initialize history with loaded components
+          setHistory([finalUniqueComponents]);
+          setHistoryIndex(0);
+          prevComponentsRef.current = JSON.stringify(finalUniqueComponents.map(c => ({ id: c.id, position: c.position, rotation: c.rotation })));
+          // Track all loaded component IDs
+          addedComponentIdsRef.current = new Set(finalUniqueComponents.map(c => c.id));
+          hasLoadedRef.current = true;
+          loadedProjectIdRef.current = project.id; // Track which project was loaded
+          console.log('✅ Project loaded successfully');
+          console.log('✅ Loaded components:', finalUniqueComponents.length);
+          console.log('✅ Component IDs:', finalUniqueComponents.map(c => c.id));
+          console.log('✅ Tracked component IDs:', Array.from(addedComponentIdsRef.current));
         } else {
           // Create default project
           console.log('No projects found, creating default project...');
@@ -276,13 +343,28 @@ const Builder = () => {
           if (!createRes.ok) {
             console.error('Failed to create project:', createRes.status);
             isLoadingRef.current = false;
+            hasLoadedRef.current = true; // Mark as loaded to prevent infinite retries
             return;
           }
           
           const newProject = await createRes.json();
           console.log('Created new project:', newProject.id);
           setCurrentProjectId(newProject.id);
+          
+          // Update URL if we created a new project and we're not in demo mode
+          if (id !== 'demo' && id !== newProject.id.toString()) {
+            navigate(`/builder/${newProject.id}`, { replace: true });
+          }
+          
+          // Initialize with empty components for new project
+          setSceneComponents([]);
+          setHistory([[]]);
+          setHistoryIndex(0);
+          prevComponentsRef.current = JSON.stringify([]);
+          addedComponentIdsRef.current = new Set();
           hasLoadedRef.current = true;
+          loadedProjectIdRef.current = newProject.id; // Track which project was loaded
+          console.log('✅ New project created and initialized');
         }
       } catch (error) {
         console.error('Failed to load project:', error);
@@ -292,7 +374,8 @@ const Builder = () => {
     };
     
     loadProject();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]); // Only depend on id to avoid infinite loops
 
   // Generate BOM from real components
   const bomItems: BOMItem[] = sceneComponents.map(comp => ({
@@ -487,8 +570,36 @@ const Builder = () => {
         return;
       }
       
-      // Use the backend response to create the component with correct data
-      // IMPORTANT: Preserve the drop position and bounding_box from the drag operation
+      // For NEW components, ALWAYS use default dimensions based on component type
+      // This ensures new components spawn with correct default dimensions
+      // We ignore the backend's bounding_box for new components to ensure consistency
+      const isConveyor = (assemblyItem.component.category_label || assemblyItem.component.category || '').toLowerCase().includes('belt') || 
+                        (assemblyItem.component.category_label || assemblyItem.component.category || '').toLowerCase().includes('conveyor');
+      
+      let finalBoundingBox: { min: number[], max: number[] };
+      
+      // ALWAYS create default dimensions for new components
+      if (isConveyor) {
+        // Default conveyor dimensions: 1000mm length, 500mm width, 300mm height
+        // For conveyors: X=width, Y=height, Z=length in world space
+        // But in bounding_box: [0]=width, [1]=height, [2]=length
+        const defaultLength = 1000;  // Total length (D)
+        const defaultWidth = 500;    // Conveyor width (R)
+        const defaultHeight = 300;   // Height
+        
+        finalBoundingBox = {
+          min: [-defaultWidth / 2, 0, -defaultLength / 2],
+          max: [defaultWidth / 2, defaultHeight, defaultLength / 2],
+        };
+      } else {
+        // Default dimensions for other components
+        const defaultSize = 450;
+        finalBoundingBox = {
+          min: [-defaultSize / 2, -defaultSize / 2, -defaultSize / 2],
+          max: [defaultSize / 2, defaultSize / 2, defaultSize / 2],
+        };
+      }
+      
       const newComponent: SceneComponent = {
         id: `comp-${assemblyItem.id}`,
         componentId: assemblyItem.component.id,
@@ -496,42 +607,27 @@ const Builder = () => {
         category: assemblyItem.component.category_label || assemblyItem.component.category || '',
         glb_url: assemblyItem.component.glb_url || null,
         original_url: assemblyItem.component.original_url || null,
-        // Preserve bounding_box from drag data (it should have the correct dimensions)
-        bounding_box: dropBoundingBox || assemblyItem.component.bounding_box || null,
+        // Use the validated bounding_box
+        bounding_box: finalBoundingBox,
         center: dropCenter || assemblyItem.component.center || [0, 0, 0],
         // Use the drop position (calculated via raycasting), not the backend position
         position: dropPosition as [number, number, number],
         rotation: [assemblyItem.rotation_x || 0, assemblyItem.rotation_y || 0, assemblyItem.rotation_z || 0] as [number, number, number],
       };
       
-      console.log('✅ Component created with drop position:', newComponent.position);
-      console.log('✅ Component bounding_box:', newComponent.bounding_box);
-      
-      console.log('✅ Created newComponent object:', newComponent);
 
-      console.log('🎨 Adding component to scene:', newComponent);
-      console.log('🎨 GLB URL:', newComponent.glb_url);
-      console.log('🎨 Position:', newComponent.position);
-      console.log('🎨 Current sceneComponents before add:', sceneComponents.length);
       
       // Use functional update to ensure we have the latest state
       // Only add if component doesn't already exist
       setSceneComponents(prev => {
-        console.log('🔄 setSceneComponents called. Previous count:', prev.length);
-        console.log('🔄 Previous component IDs:', prev.map(c => c.id));
-        console.log('🔄 New component ID:', newComponent.id);
-        console.log('🔄 New component backend ID:', assemblyItem.id);
-        
         // Check if we've already tracked this component ID
         if (addedComponentIdsRef.current.has(newComponent.id)) {
-          console.warn('⚠️ Component ID already tracked, skipping duplicate:', newComponent.id);
           return prev; // Don't add duplicate
         }
         
         // Check if component already exists by ID (most reliable check)
         const existingById = prev.find(c => c.id === newComponent.id);
         if (existingById) {
-          console.warn('⚠️ Component already exists by ID, skipping duplicate:', newComponent.id);
           addedComponentIdsRef.current.add(newComponent.id); // Track it
           return prev; // Don't add duplicate
         }
@@ -543,11 +639,6 @@ const Builder = () => {
           return cBackendId === backendId;
         });
         if (existingByBackendId) {
-          console.warn('⚠️ Component already exists by backend ID, skipping duplicate:', {
-            existing: existingByBackendId.id,
-            new: newComponent.id,
-            backendId: backendId
-          });
           addedComponentIdsRef.current.add(newComponent.id); // Track it
           return prev; // Don't add duplicate
         }
@@ -560,17 +651,10 @@ const Builder = () => {
           Math.abs(c.position[2] - newComponent.position[2]) < 1
         );
         if (duplicateByPosition) {
-          console.warn('⚠️ Component with same type and very close position already exists, skipping:', {
-            existing: duplicateByPosition.id,
-            new: newComponent.id,
-            position: newComponent.position
-          });
           return prev; // Don't add duplicate
         }
         
         const updated = [...prev, newComponent];
-        console.log('✅ Added new component. New count:', updated.length);
-        console.log('✅ All component IDs after add:', updated.map(c => c.id));
         return updated;
       });
       
@@ -639,23 +723,7 @@ const Builder = () => {
     }
   }, [historyIndex, history]);
 
-  // Keyboard shortcuts for undo/redo
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
-        e.preventDefault();
-        handleUndo();
-      } else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
-        e.preventDefault();
-        handleRedo();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [historyIndex, history]);
-
-  const handleDeleteComponent = async (id: string) => {
+  const handleDeleteComponent = useCallback(async (id: string) => {
     if (!currentProjectId) {
       console.error('No project loaded, cannot delete component');
       return;
@@ -671,26 +739,76 @@ const Builder = () => {
 
     // Delete from backend
     try {
-      const componentId = id.replace('comp-', '');
+      // Extract component ID - handle both 'comp-{id}' format and direct numeric ID
+      let componentId: string;
+      if (id.startsWith('comp-')) {
+        componentId = id.replace('comp-', '');
+      } else {
+        componentId = id;
+      }
+      
+      // Validate that we have a valid numeric ID
+      if (!componentId || isNaN(parseInt(componentId, 10))) {
+        console.error('Invalid component ID format:', id);
+        return;
+      }
+      
       // Include project_id in query params for better filtering (optional but recommended)
       const baseUrl = `${API_BASE}/api/assembly-items/${componentId}/`;
       const url = currentProjectId ? `${baseUrl}?project_id=${currentProjectId}` : baseUrl;
+      
+      console.log('🗑️ Deleting component:', componentId, 'from project:', currentProjectId);
+      
       const response = await fetch(url, {
         method: 'DELETE',
         credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       });
 
       if (!response.ok) {
-        console.error('Failed to delete component from backend:', response.status);
-        // Optionally reload the scene to sync with backend
-        // For now, we'll just log the error since we already removed from local state
+        const errorText = await response.text();
+        console.error('Failed to delete component from backend:', response.status, errorText);
+        // Revert local state change if backend deletion failed
+        // Note: We could reload from backend here, but for now we'll keep the optimistic update
       } else {
         console.log('✅ Successfully deleted component from backend');
       }
     } catch (error) {
       console.error('Error deleting component:', error);
+      // Revert local state change on error
+      // Note: We could reload from backend here to sync state
     }
-  };
+  }, [currentProjectId, selectedComponent]);
+
+  // Keyboard shortcuts for undo/redo and delete
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't trigger shortcuts when typing in input fields
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
+        return;
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        handleUndo();
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+        e.preventDefault();
+        handleRedo();
+      } else if (e.key === 'Delete' || e.key === 'Backspace') {
+        // Delete selected component when Delete or Backspace is pressed
+        if (selectedComponent && !isReadonly) {
+          e.preventDefault();
+          handleDeleteComponent(selectedComponent.id);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [historyIndex, history, selectedComponent, isReadonly, handleDeleteComponent, handleUndo, handleRedo]);
 
   // Comprehensive save function that saves all component states
   const saveAssembly = async (showStatus = true) => {
@@ -798,9 +916,15 @@ const Builder = () => {
       const result = await response.json();
       console.log('✅ Assembly saved successfully:', {
         updated: result.updated || 0,
+        deleted: result.deleted || 0,
         skipped: result.skipped || 0,
         errors: result.errors || []
       });
+      
+      // Log deleted items
+      if (result.deleted > 0) {
+        console.log(`🗑️ ${result.deleted} items were deleted from the backend`);
+      }
       
       // If there were skipped items, log them
       if (result.skipped > 0) {
@@ -887,6 +1011,69 @@ const Builder = () => {
     return () => clearInterval(interval);
   }, [currentProjectId, sceneComponents.length]);
 
+  // View control handlers
+  const handleCenterView = useCallback(() => {
+    if (sceneControlsRef.current) {
+      sceneControlsRef.current.resetCamera();
+    }
+  }, []);
+
+  const handleZoomIn = useCallback(() => {
+    if (sceneControlsRef.current) {
+      sceneControlsRef.current.zoomIn(1.2);
+    }
+  }, []);
+
+  const handleZoomOut = useCallback(() => {
+    if (sceneControlsRef.current) {
+      sceneControlsRef.current.zoomOut(1.2);
+    }
+  }, []);
+
+  const handlePanMode = useCallback(() => {
+    if (panModeActive) {
+      // Disable pan mode
+      setPanModeActive(false);
+      setActiveTool('select');
+      if (sceneControlsRef.current) {
+        sceneControlsRef.current.disablePanMode();
+      }
+    } else {
+      // Enable pan mode
+      setPanModeActive(true);
+      setActiveTool('pan');
+      if (sceneControlsRef.current) {
+        sceneControlsRef.current.enablePanMode();
+      }
+    }
+  }, [panModeActive]);
+
+  const handleErase = useCallback(() => {
+    if (sceneControlsRef.current) {
+      sceneControlsRef.current.clearSelection();
+      sceneControlsRef.current.clearHighlights();
+    }
+  }, []);
+
+  const handleSettings = useCallback(() => {
+    setShowSettingsPanel(!showSettingsPanel);
+  }, [showSettingsPanel]);
+  
+  const handleSceneSettingsChange = useCallback((settings: SceneSettings) => {
+    setSceneSettings(settings);
+  }, []);
+  
+  const handleResetSceneSettings = useCallback(() => {
+    setSceneSettings(DEFAULT_SCENE_SETTINGS);
+  }, []);
+
+  // Update activeTool when pan mode changes
+  useEffect(() => {
+    if (!panModeActive && activeTool === 'pan') {
+      setActiveTool('select');
+    }
+  }, [panModeActive, activeTool]);
+
   return (
     <div className="h-screen flex flex-col bg-background overflow-hidden">
       {/* Readonly/Demo Banner */}
@@ -924,6 +1111,13 @@ const Builder = () => {
         canRedo={historyIndex < history.length - 1}
         onSave={() => saveAssembly(true)}
         saveStatus={saveStatus}
+        onCenterView={handleCenterView}
+        onZoomIn={handleZoomIn}
+        onZoomOut={handleZoomOut}
+        onPanMode={handlePanMode}
+        onErase={handleErase}
+        onSettings={handleSettings}
+        panModeActive={panModeActive}
       />
 
       {/* Main Content Area */}
@@ -955,6 +1149,7 @@ const Builder = () => {
             onAddComponent={handleAddComponent}
             onUpdateComponent={handleUpdateComponent}
             activeTool={activeTool}
+            controlsRef={sceneControlsRef}
           />
         {/* Save button removed - now in Toolbar */}
         </div>
@@ -1005,15 +1200,21 @@ const Builder = () => {
                         
                         // Use the EXACT provided dimension values - do NOT recalculate from bounding box
                         // This ensures we use the values from AdjustDimensions component
+                        // IMPORTANT: Preserve existing dimensions if not provided (so changing one doesn't affect others)
+                        const existingWidth = Math.abs(oldMax[0] - oldMin[0]);
+                        const existingHeight = Math.abs(oldMax[1] - oldMin[1]);
+                        const existingLength = Math.abs(oldMax[2] - oldMin[2]);
+                        
+                        // Only update dimensions that are explicitly provided, preserve others
                         const newWidth = (component.dimensions.width !== undefined && component.dimensions.width !== null && component.dimensions.width > 0)
                           ? Number(component.dimensions.width)
-                          : Math.abs(oldMax[0] - oldMin[0]) || 1;
+                          : (existingWidth > 0 ? existingWidth : 500); // Preserve existing or use default
                         const newHeight = (component.dimensions.height !== undefined && component.dimensions.height !== null && component.dimensions.height > 0)
                           ? Number(component.dimensions.height)
-                          : Math.abs(oldMax[1] - oldMin[1]) || 1;
+                          : (existingHeight > 0 ? existingHeight : 300); // Preserve existing or use default
                         const newLength = (component.dimensions.length !== undefined && component.dimensions.length !== null && component.dimensions.length > 0)
                           ? Number(component.dimensions.length)
-                          : Math.abs(oldMax[2] - oldMin[2]) || 1;
+                          : (existingLength > 0 ? existingLength : 1000); // Preserve existing or use default
                         
                         // Validate dimensions are reasonable (prevent huge jumps)
                         if (newWidth > 1000 || newHeight > 2000 || newLength > 5000) {
@@ -1054,6 +1255,24 @@ const Builder = () => {
           </div>
         </div>
       </div>
+
+      {/* Settings Dialog */}
+      <SettingsDialog
+        open={showSettings}
+        onOpenChange={setShowSettings}
+        showGrid={showGrid}
+        onToggleGrid={(enabled) => setShowGrid(enabled)}
+        viewMode={viewMode}
+        onViewModeChange={setViewMode}
+      />
+      
+      {/* 3D Settings Panel */}
+      <SettingsPanel
+        open={showSettingsPanel}
+        settings={sceneSettings}
+        onSettingsChange={handleSceneSettingsChange}
+        onResetSettings={handleResetSceneSettings}
+      />
     </div>
   );
 };

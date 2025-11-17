@@ -94,7 +94,7 @@ export const ComponentLibrary = ({ collapsed = false, onToggleCollapse }: Compon
               <Card 
                 key={component.id}
                 className="p-3 cursor-move hover:bg-secondary transition-smooth hover:border-primary overflow-visible"
-                draggable
+                draggable={true}
                 onDragStart={(e) => {
                   try {
                     // Ensure URLs are absolute
@@ -109,6 +109,25 @@ export const ComponentLibrary = ({ collapsed = false, onToggleCollapse }: Compon
                       originalUrl = `${API_BASE}${originalUrl.startsWith('/') ? originalUrl : '/' + originalUrl}`;
                     }
                     
+                    // Normalize bounding_box format if it exists
+                    let normalizedBoundingBox = component.bounding_box || null;
+                    if (normalizedBoundingBox) {
+                      // Check if it's in the correct format {min: [x,y,z], max: [x,y,z]}
+                      if (normalizedBoundingBox.min && normalizedBoundingBox.max && 
+                          Array.isArray(normalizedBoundingBox.min) && Array.isArray(normalizedBoundingBox.max)) {
+                        // Format is correct, use as-is
+                      } else if (normalizedBoundingBox.x && normalizedBoundingBox.y && normalizedBoundingBox.z) {
+                        // Convert from {x: {min, max}, y: {min, max}, z: {min, max}} format
+                        normalizedBoundingBox = {
+                          min: [normalizedBoundingBox.x.min || 0, normalizedBoundingBox.y.min || 0, normalizedBoundingBox.z.min || 0],
+                          max: [normalizedBoundingBox.x.max || 0, normalizedBoundingBox.y.max || 0, normalizedBoundingBox.z.max || 0],
+                        };
+                      } else {
+                        // Invalid format, treat as missing
+                        normalizedBoundingBox = null;
+                      }
+                    }
+                    
                     // Ensure all required fields are present with defaults
                     const dragData = {
                       id: component.id,
@@ -116,30 +135,135 @@ export const ComponentLibrary = ({ collapsed = false, onToggleCollapse }: Compon
                       category: category || 'unknown',
                       glb_url: glbUrl,
                       original_url: originalUrl,
-                      bounding_box: component.bounding_box || null,
+                      bounding_box: normalizedBoundingBox,
                       center: component.center || [0, 0, 0],
                     };
-                    
-                    console.log('Drag started with data:', dragData);
                     
                     // Set data in multiple formats for better compatibility
                     const dataString = JSON.stringify(dragData);
                     e.dataTransfer.setData('application/json', dataString);
                     e.dataTransfer.setData('text/plain', dataString);
                     e.dataTransfer.effectAllowed = 'copy';
+                    e.dataTransfer.dropEffect = 'copy';
+                    
+                    // Create custom drag image from the 3D preview canvas
+                    // Note: setDragImage must be called synchronously during dragStart
+                    try {
+                      // Find the canvas element in the preview
+                      const cardElement = e.currentTarget;
+                      const sourceCanvas = cardElement.querySelector('canvas') as HTMLCanvasElement;
+                      
+                      if (sourceCanvas && sourceCanvas.width > 0 && sourceCanvas.height > 0) {
+                        // Create a new canvas for the drag preview
+                        const dragCanvas = document.createElement('canvas');
+                        dragCanvas.width = 128;
+                        dragCanvas.height = 128;
+                        const ctx = dragCanvas.getContext('2d', { willReadFrequently: false });
+                        
+                        if (ctx) {
+                          // Draw semi-transparent dark background
+                          ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+                          ctx.fillRect(0, 0, 128, 128);
+                          
+                          // Draw border with accent color
+                          ctx.strokeStyle = 'rgba(0, 180, 216, 0.6)';
+                          ctx.lineWidth = 2;
+                          ctx.strokeRect(1, 1, 126, 126);
+                          
+                          // Draw the 3D model from source canvas, scaled and centered
+                          const padding = 10;
+                          const drawWidth = 128 - (padding * 2);
+                          const drawHeight = 128 - (padding * 2);
+                          
+                          // Use high-quality scaling
+                          ctx.imageSmoothingEnabled = true;
+                          ctx.imageSmoothingQuality = 'high';
+                          
+                          // Draw the canvas content
+                          ctx.drawImage(
+                            sourceCanvas,
+                            0,
+                            0,
+                            sourceCanvas.width,
+                            sourceCanvas.height,
+                            padding,
+                            padding,
+                            drawWidth,
+                            drawHeight
+                          );
+                          
+                          // Create a wrapper div to hold the canvas (some browsers need an element, not canvas directly)
+                          const dragImageWrapper = document.createElement('div');
+                          dragImageWrapper.style.width = '128px';
+                          dragImageWrapper.style.height = '128px';
+                          dragImageWrapper.style.position = 'absolute';
+                          dragImageWrapper.style.top = '-2000px';
+                          dragImageWrapper.style.left = '-2000px';
+                          dragImageWrapper.style.pointerEvents = 'none';
+                          dragImageWrapper.appendChild(dragCanvas);
+                          
+                          // Append to body (required for setDragImage to work)
+                          document.body.appendChild(dragImageWrapper);
+                          
+                          // Set drag image - use the wrapper div
+                          e.dataTransfer.setDragImage(dragImageWrapper, 64, 64);
+                          
+                          // Clean up after drag operation completes
+                          const cleanup = () => {
+                            setTimeout(() => {
+                              if (dragImageWrapper.parentNode) {
+                                document.body.removeChild(dragImageWrapper);
+                              }
+                            }, 100);
+                          };
+                          
+                          // Clean up on drag end
+                          cardElement.addEventListener('dragend', cleanup, { once: true });
+                        }
+                      }
+                    } catch (dragImageError) {
+                      console.warn('Could not create custom drag image:', dragImageError);
+                      // Continue with default drag image if custom one fails
+                    }
+                    
+                    console.log('🚀 Drag data set, types:', e.dataTransfer.types);
                   } catch (error) {
-                    console.error('Error setting drag data:', error);
+                    console.error('❌ Error setting drag data:', error);
                     // Still allow drag even if data setting fails
                     e.dataTransfer.effectAllowed = 'copy';
                   }
                 }}
+                onDragEnd={(e) => {
+                  // Clean up any drag-related state
+                  e.dataTransfer.clearData();
+                }}
               >
-                <div className="space-y-3">
+                <div className="space-y-3" style={{ pointerEvents: 'auto' }}>
                   {/* 3D Preview */}
-                  <div style={{ pointerEvents: 'none' }}>
+                  <div 
+                    style={{ 
+                      pointerEvents: 'none',
+                      userSelect: 'none',
+                      WebkitUserSelect: 'none'
+                    }}
+                  >
                     <ComponentLibraryPreview 
-                      glbUrl={component.glb_url}
-                      originalUrl={component.original_url}
+                      glbUrl={(() => {
+                        // Format GLB URL to be absolute if needed
+                        let url = component.glb_url || null;
+                        if (url && !url.startsWith('http')) {
+                          url = `${API_BASE}${url.startsWith('/') ? url : '/' + url}`;
+                        }
+                        return url;
+                      })()}
+                      originalUrl={(() => {
+                        // Format original URL to be absolute if needed
+                        let url = component.original_url || null;
+                        if (url && !url.startsWith('http')) {
+                          url = `${API_BASE}${url.startsWith('/') ? url : '/' + url}`;
+                        }
+                        return url;
+                      })()}
                       category={category}
                       apiBase={API_BASE}
                     />
