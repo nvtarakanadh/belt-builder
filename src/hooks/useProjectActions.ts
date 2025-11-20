@@ -1,7 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-
-const API_BASE = (import.meta as any).env?.VITE_API_BASE || "http://localhost:8000";
+import { API_BASE } from "@/lib/config";
 
 export interface Project {
   id: number;

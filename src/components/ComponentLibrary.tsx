@@ -11,6 +11,7 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
+import { API_BASE } from '@/lib/config';
 
 type BackendComponent = {
   id: number;
@@ -33,8 +34,6 @@ export const ComponentLibrary = ({ collapsed = false, onToggleCollapse }: Compon
   const [items, setItems] = useState<BackendComponent[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const API_BASE = (import.meta as any).env?.VITE_API_BASE || "http://localhost:8000";
 
   useEffect(() => {
     let cancelled = false;

@@ -19,7 +19,7 @@ import { Project } from "@/hooks/useProjectActions";
 import { toast } from "sonner";
 import { apiRequest } from "@/lib/api";
 
-const API_BASE = (import.meta as any).env?.VITE_API_BASE || "http://localhost:8000";
+import { API_BASE } from '@/lib/config';
 
 export default function Projects() {
   const { isAuthenticated, isLoading: isAuthLoading } = useAuth();

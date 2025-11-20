@@ -2,7 +2,7 @@
  * Utility functions for API requests with CSRF token handling
  */
 
-const API_BASE = (import.meta as any).env?.VITE_API_BASE || "http://localhost:8000";
+import { API_BASE } from './config';
 
 /**
  * Get CSRF token from cookies

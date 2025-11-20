@@ -15,6 +15,7 @@ import { ConveyorComponent, BOMItem } from '@/types/conveyor';
 import { useAuth } from '@/hooks/useAuth';
 import { usePlacementStore } from '@/state/store';
 import { getOrFetchCsrfToken } from '@/lib/api';
+import { API_BASE } from '@/lib/config';
 
 type SceneComponent = {
   id: string;
@@ -72,8 +73,6 @@ const Builder = () => {
   // 3D Settings panel state
   const [showSettingsPanel, setShowSettingsPanel] = useState(false);
   const [sceneSettings, setSceneSettings] = useState<SceneSettings>(DEFAULT_SCENE_SETTINGS);
-
-  const API_BASE = (import.meta as any).env?.VITE_API_BASE || "http://localhost:8000";
 
   // Save to history whenever components change (except during undo/redo)
   const prevComponentsRef = useRef<string>('');

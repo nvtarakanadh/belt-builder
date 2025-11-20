@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from "react";
+import { API_BASE } from "@/lib/config";
 
 interface AuthContextType {
   isAuthenticated: boolean;
@@ -20,7 +21,6 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     const checkAuth = async () => {
       setIsLoading(true);
       try {
-        const API_BASE = (import.meta as any).env?.VITE_API_BASE || "http://localhost:8000";
         const response = await fetch(`${API_BASE}/api/auth/user/`, {
           credentials: "include",
         });
@@ -46,7 +46,6 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   const login = async (username: string, password: string) => {
-    const API_BASE = (import.meta as any).env?.VITE_API_BASE || "http://localhost:8000";
     const response = await fetch(`${API_BASE}/api/auth/login/`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -65,7 +64,6 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const logout = async () => {
-    const API_BASE = (import.meta as any).env?.VITE_API_BASE || "http://localhost:8000";
     await fetch(`${API_BASE}/api/auth/logout/`, {
       method: "POST",
       credentials: "include",

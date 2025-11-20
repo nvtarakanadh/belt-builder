@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
 import { ArrowRight, UserPlus, Eye, EyeOff } from "lucide-react";
 
-const API_BASE = (import.meta as any).env?.VITE_API_BASE || "http://localhost:8000";
+import { API_BASE } from '@/lib/config';
 
 export default function SignUp() {
   const [username, setUsername] = useState("");
@@ -69,7 +69,13 @@ export default function SignUp() {
       navigate("/login", { state: { message: "Account created successfully! Please sign in." } });
     } catch (err: any) {
       if (err.message === "Failed to fetch" || err.name === "TypeError") {
-        setError(`Cannot connect to server. Please make sure the backend is running at ${API_BASE}`);
+        const isLocalhost = API_BASE.includes('localhost') || API_BASE.includes('127.0.0.1');
+        const errorMsg = isLocalhost
+          ? `Cannot connect to server. Please make sure the backend is running at ${API_BASE}`
+          : `Cannot connect to backend API at ${API_BASE}. ` +
+            `If this is a production deployment, please ensure the VITE_API_BASE environment variable is set correctly. ` +
+            `Check the deployment documentation for setup instructions.`;
+        setError(errorMsg);
       } else {
         setError(err.message || "Failed to create account. Please try again.");
       }
