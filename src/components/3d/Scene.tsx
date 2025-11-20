@@ -1103,7 +1103,17 @@ function TransformControlWrapper({
       
       // Update group position and rotation to match component
       groupRef.current.position.set(component.position[0], constrainedY, component.position[2]);
-        groupRef.current.rotation.set(...(component.rotation || [0, 0, 0]));
+      
+      // Lock rotation for Wheel with Break
+      let rotation: [number, number, number];
+      if (isWheelWithBreak) {
+        // Wheel with Break must always be locked at X: -90.0 degrees
+        rotation = [-Math.PI / 2, 0, 0];
+      } else {
+        rotation = component.rotation || [0, 0, 0];
+      }
+      
+      groupRef.current.rotation.set(...rotation);
       groupRef.current.updateMatrixWorld();
       
       // Update controls if they exist
@@ -1174,6 +1184,16 @@ function TransformControlWrapper({
             group.position.y = 0.10;
             group.updateMatrixWorld();
             // Force update controls to reflect the locked position
+            if (controlsRef.current) {
+              controlsRef.current.updateMatrixWorld();
+            }
+          }
+          // Also lock rotation to X: -90.0 degrees
+          if (group.rotation.x !== -Math.PI / 2 || group.rotation.y !== 0 || group.rotation.z !== 0) {
+            group.rotation.x = -Math.PI / 2;
+            group.rotation.y = 0;
+            group.rotation.z = 0;
+            group.updateMatrixWorld();
             if (controlsRef.current) {
               controlsRef.current.updateMatrixWorld();
             }
@@ -1293,11 +1313,29 @@ function TransformControlWrapper({
           yPos,
           Math.round(obj.position.z / snap.translate) * snap.translate
         ] as [number, number, number];
-        const rot = [
-          Math.round(obj.rotation.x / snap.rotate) * snap.rotate,
-          Math.round(obj.rotation.y / snap.rotate) * snap.rotate,
-          Math.round(obj.rotation.z / snap.rotate) * snap.rotate
-        ] as [number, number, number];
+        
+        // Constrain rotation based on component type
+        let rot: [number, number, number];
+        if (isWheelWithBreak) {
+          // Wheel with Break must always be locked at X: -90.0 degrees (-Math.PI / 2)
+          rot = [-Math.PI / 2, 0, 0] as [number, number, number];
+          // Force rotation to match locked value
+          obj.rotation.x = -Math.PI / 2;
+          obj.rotation.y = 0;
+          obj.rotation.z = 0;
+          obj.updateMatrixWorld();
+          // Force update controls to prevent visual glitches
+          if (controlsRef.current) {
+            controlsRef.current.updateMatrixWorld();
+          }
+        } else {
+          // Apply normal rotation snapping for other components
+          rot = [
+            Math.round(obj.rotation.x / snap.rotate) * snap.rotate,
+            Math.round(obj.rotation.y / snap.rotate) * snap.rotate,
+            Math.round(obj.rotation.z / snap.rotate) * snap.rotate
+          ] as [number, number, number];
+        }
         onUpdate(pos, rot);
       }}
           />
@@ -1879,8 +1917,8 @@ export const Scene = ({
           position[2] // Use drop Z position
         ];
         
-        // Special rotation handling for belt and rod components - spawn at 90 degrees around X axis
-        // isRod is already declared above, reuse it
+        // Special rotation handling for belt, rod, and Wheel with Break components
+        // isRod and isWheelWithBreak are already declared above, reuse them
         const isBelt = (component.name || '').toLowerCase().includes('belt') || 
                       (component.category || '').toLowerCase().includes('belt');
         
@@ -1888,6 +1926,9 @@ export const Scene = ({
         if (isBelt || isRod) {
           // Rotate 90 degrees around X axis
           initialRotation = [Math.PI / 2, 0, 0] as [number, number, number];
+        } else if (isWheelWithBreak) {
+          // Wheel with Break: rotate -90 degrees around X axis
+          initialRotation = [-Math.PI / 2, 0, 0] as [number, number, number];
         }
         
         const componentToAdd = {
