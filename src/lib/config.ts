@@ -45,7 +45,9 @@ function getApiBaseUrl(): string {
   return 'http://localhost:8000';
 }
 
-export const API_BASE = getApiBaseUrl();
+// Remove trailing slash to avoid double slashes in URLs
+const rawApiBase = getApiBaseUrl();
+export const API_BASE = rawApiBase.endsWith('/') ? rawApiBase.slice(0, -1) : rawApiBase;
 
 // Log API base for debugging
 if (typeof window !== 'undefined') {
