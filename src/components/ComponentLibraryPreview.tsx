@@ -159,7 +159,7 @@ export function ComponentLibraryPreview({ glbUrl, originalUrl, category, apiBase
             }}
             key={formattedGlbUrl || 'no-model'} // Force re-render when URL changes
           >
-            <PerspectiveCamera makeDefault position={[2, 2, 2]} fov={50} />
+            <PerspectiveCamera makeDefault position={[1.5, 1.5, 1.5]} fov={50} />
             {/* Auto-rotate only, no manual controls */}
             <OrbitControls 
               enableZoom={false}
@@ -177,14 +177,6 @@ export function ComponentLibraryPreview({ glbUrl, originalUrl, category, apiBase
           </Canvas>
         </ErrorCatcher>
       </Suspense>
-      
-      {/* Status Indicator Overlay */}
-      {hasModel && (
-        <div className="absolute bottom-2 left-1/2 transform -translate-x-1/2 flex items-center gap-1 px-2 py-1 rounded-full bg-primary/10 border border-primary/20 backdrop-blur-sm">
-          <div className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />
-          <span className="text-[9px] text-muted-foreground font-medium">3D Ready</span>
-        </div>
-      )}
       
       {/* Category Badge */}
       {category && (

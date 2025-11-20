@@ -347,11 +347,11 @@ function GLBModelContent({ url, position, rotation, selected, onSelect, targetSi
   // Dimension changes are handled by the scaling effect, not by re-initialization
   useEffect(() => {
     if (url !== lastUrlRef.current) {
-      hasInitializedRef.current = false;
+          hasInitializedRef.current = false;
       originalSizeRef.current = null;
-      lastTargetSizeRef.current = '';
+          lastTargetSizeRef.current = '';
       lastUrlRef.current = url;
-    }
+        }
   }, [url]);
   
   // Store axis mapping to determine which model axis corresponds to which dimension
@@ -679,7 +679,7 @@ function GLBModelContent({ url, position, rotation, selected, onSelect, targetSi
       // Keep model at Y=0 in local space
       // Y position adjustment is handled by the parent group based on bounding_box
       clonedScene.position.y = 0;
-      clonedScene.updateMatrixWorld(true);
+        clonedScene.updateMatrixWorld(true);
       
       // DO NOT recenter the model horizontally - this causes the component to move after placement
       // The model should maintain its original pivot point for X and Z
@@ -744,8 +744,12 @@ function GLBModelContent({ url, position, rotation, selected, onSelect, targetSi
       object={clonedScene}
       frustumCulled={true}
       onClick={(e: any) => {
+        // Only stop propagation and select if this is a click (not a drag)
+        // Allow dragging to work by not stopping propagation during drag
+        if (!e.delta || (Math.abs(e.delta) < 0.01)) {
         e.stopPropagation();
         onSelect?.();
+        }
       }}
       onPointerOver={(e: any) => {
         e.stopPropagation();
@@ -1058,7 +1062,8 @@ function TransformControlWrapper({
   snap, 
   onUpdate, 
   children,
-  showCoordinateSystem
+  showCoordinateSystem,
+  orbitControlsRef
 }: { 
   component: SceneComponent;
   transformMode: 'translate' | 'rotate' | 'scale';
@@ -1066,6 +1071,7 @@ function TransformControlWrapper({
   onUpdate: (pos: [number, number, number], rot: [number, number, number]) => void;
   children: React.ReactNode;
   showCoordinateSystem?: boolean;
+  orbitControlsRef?: React.RefObject<any>;
 }) {
   const GRID_OFFSET = 0; // Components sit exactly on grid lines (Y = 0)
   const groupRef = useRef<THREE.Group>(null);
@@ -1122,6 +1128,24 @@ function TransformControlWrapper({
       }
     }
   }, [component.position, component.rotation]);
+  
+  // Make all meshes in the component interactive for dragging when transform controls are active
+  useEffect(() => {
+    if (!groupRef.current) return;
+    
+    // Traverse all meshes and ensure they can be raycasted for dragging
+    groupRef.current.traverse((child) => {
+      if ((child as THREE.Mesh).isMesh) {
+        const mesh = child as THREE.Mesh;
+        // Ensure mesh is raycastable (this is the default, but making it explicit)
+        mesh.raycast = THREE.Mesh.prototype.raycast;
+        // Make sure geometry is set up for raycasting
+        if (mesh.geometry) {
+          mesh.geometry.computeBoundingSphere();
+        }
+      }
+    });
+  }, [groupRef.current, component.id]);
   
   // Track dragging state and enforce Y position constraint during drag
   useEffect(() => {
@@ -1214,6 +1238,154 @@ function TransformControlWrapper({
     };
   }, [component.name]);
   
+  // Custom drag handling for move tool - allows dragging by clicking anywhere on component
+  const isDraggingComponentRef = useRef(false);
+  const dragStartPosRef = useRef<THREE.Vector3 | null>(null);
+  const dragStartIntersectionRef = useRef<THREE.Vector3 | null>(null);
+  const dragPlaneRef = useRef<THREE.Plane | null>(null);
+  const raycasterRef = useRef(new THREE.Raycaster());
+  const mouseRef = useRef(new THREE.Vector2());
+
+  // Add pointer event handlers for dragging when in translate mode
+  useEffect(() => {
+    if (!groupRef.current || transformMode !== 'translate') return;
+    
+    const group = groupRef.current;
+    const canvas = gl.domElement;
+    
+    const handlePointerDown = (e: PointerEvent) => {
+      // Only handle if clicking on the component itself (not controls)
+      const rect = canvas.getBoundingClientRect();
+      mouseRef.current.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      mouseRef.current.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+      
+      raycasterRef.current.setFromCamera(mouseRef.current, camera);
+      
+      // Check if we clicked on any mesh in the component
+      const meshes: THREE.Mesh[] = [];
+      group.traverse((child) => {
+        if ((child as THREE.Mesh).isMesh) {
+          meshes.push(child as THREE.Mesh);
+        }
+      });
+      
+      const intersects = raycasterRef.current.intersectObjects(meshes, true);
+      
+      if (intersects.length > 0) {
+        // Check if we clicked on TransformControls handles (they have specific names)
+        const intersectObject = intersects[0].object;
+        const isControlHandle = intersectObject.parent?.name?.includes('TransformControls') || 
+                               intersectObject.name?.includes('TransformControls');
+        
+        if (!isControlHandle) {
+          isDraggingComponentRef.current = true;
+          dragStartPosRef.current = group.position.clone();
+          
+          // Store the initial intersection point on the component
+          dragStartIntersectionRef.current = intersects[0].point.clone();
+          
+          // Create a horizontal plane at the component's Y position for dragging
+          const planeNormal = new THREE.Vector3(0, 1, 0); // Drag on horizontal plane
+          dragPlaneRef.current = new THREE.Plane(planeNormal, -group.position.y);
+          
+          // Disable OrbitControls while dragging
+          if (orbitControlsRef?.current) {
+            orbitControlsRef.current.enabled = false;
+          }
+          
+          canvas.style.cursor = 'grabbing';
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      }
+    };
+    
+    const handlePointerMove = (e: PointerEvent) => {
+      if (!isDraggingComponentRef.current || !groupRef.current || !dragPlaneRef.current || !dragStartPosRef.current || !dragStartIntersectionRef.current) return;
+      
+      const rect = canvas.getBoundingClientRect();
+      mouseRef.current.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      mouseRef.current.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+      
+      raycasterRef.current.setFromCamera(mouseRef.current, camera);
+      
+      const intersectionPoint = new THREE.Vector3();
+      const distance = raycasterRef.current.ray.intersectPlane(dragPlaneRef.current, intersectionPoint);
+      
+      if (distance !== null) {
+        // Calculate the delta from the initial intersection point
+        const delta = new THREE.Vector3().subVectors(intersectionPoint, dragStartIntersectionRef.current);
+        const newPos = dragStartPosRef.current.clone().add(delta);
+        
+        // Apply constraints
+        const componentName = (component.name || '').toLowerCase();
+        const isCM = componentName === 'cm';
+        const isWheelWithBreak = componentName.includes('wheel') && componentName.includes('break');
+        
+        let constrainedY = newPos.y;
+        if (isCM) {
+          constrainedY = 1.00;
+        } else if (isWheelWithBreak) {
+          constrainedY = 0.10;
+        } else {
+          constrainedY = Math.max(newPos.y, GRID_OFFSET);
+        }
+        
+        // Apply snapping
+        const snappedX = Math.round(newPos.x / snap.translate) * snap.translate;
+        const snappedZ = Math.round(newPos.z / snap.translate) * snap.translate;
+        
+        groupRef.current.position.set(snappedX, constrainedY, snappedZ);
+        groupRef.current.updateMatrixWorld();
+        
+        // Update TransformControls if they exist
+        if (controlsRef.current) {
+          controlsRef.current.updateMatrixWorld();
+        }
+        
+        // Update component position
+        const pos: [number, number, number] = [snappedX, constrainedY, snappedZ];
+        const rot: [number, number, number] = [
+          groupRef.current.rotation.x,
+          groupRef.current.rotation.y,
+          groupRef.current.rotation.z
+        ];
+        onUpdate(pos, rot);
+      }
+      
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    
+    const handlePointerUp = (e: PointerEvent) => {
+      if (isDraggingComponentRef.current) {
+        isDraggingComponentRef.current = false;
+        dragStartPosRef.current = null;
+        dragStartIntersectionRef.current = null;
+        dragPlaneRef.current = null;
+        
+        // Re-enable OrbitControls after dragging
+        if (orbitControlsRef?.current) {
+          orbitControlsRef.current.enabled = true;
+        }
+        
+        canvas.style.cursor = 'default';
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+    
+    canvas.addEventListener('pointerdown', handlePointerDown);
+    canvas.addEventListener('pointermove', handlePointerMove);
+    canvas.addEventListener('pointerup', handlePointerUp);
+    
+    return () => {
+      canvas.removeEventListener('pointerdown', handlePointerDown);
+      canvas.removeEventListener('pointermove', handlePointerMove);
+      canvas.removeEventListener('pointerup', handlePointerUp);
+    };
+  }, [transformMode, component, snap, onUpdate, gl, camera]);
+  
   // drei's TransformControls automatically coordinates with OrbitControls
   // Use object prop to directly attach to the group
   
@@ -1249,17 +1421,20 @@ function TransformControlWrapper({
         const isCM = componentName === 'cm';
         const isWheelWithBreak = componentName.includes('wheel') && componentName.includes('break');
         return (
-          <TransformControls
-            ref={controlsRef}
-            object={groupObject}
-            mode={transformMode}
-            space="world"
-            translationSnap={snap.translate}
-            rotationSnap={snap.rotate}
-            scaleSnap={snap.scale}
-            showX={true}
+    <TransformControls
+      ref={controlsRef}
+          object={groupObject}
+      mode={transformMode}
+      space="world"
+      translationSnap={snap.translate}
+      rotationSnap={snap.rotate}
+      scaleSnap={snap.scale}
+      showX={true}
             showY={!(isCM || isWheelWithBreak)} // Hide Y-axis handle for CM and Wheel with Break components to prevent vertical movement
-            showZ={true}
+      showZ={true}
+            // Enable dragging by clicking anywhere on the object (not just handles)
+            // This allows users to drag components by touching/clicking anywhere on the mesh
+            enabled={true}
       onObjectChange={(e) => {
             const obj = groupRef.current;
             if (!obj) return;
@@ -1293,18 +1468,18 @@ function TransformControlWrapper({
         } else {
           // Constrain Y position to be at least GRID_OFFSET (on grid) for other components
           // This prevents components from going below the grid during move/rotate
-          if (yPos < GRID_OFFSET) {
-            yPos = GRID_OFFSET;
-            // Immediately update the object's position to enforce constraint
-            obj.position.y = GRID_OFFSET;
-            obj.updateMatrixWorld();
-          }
-          
+        if (yPos < GRID_OFFSET) {
+          yPos = GRID_OFFSET;
+          // Immediately update the object's position to enforce constraint
+          obj.position.y = GRID_OFFSET;
+          obj.updateMatrixWorld();
+        }
+        
           // Apply snapping after constraint (but not for CM - it's locked)
-          yPos = Math.round(yPos / snap.translate) * snap.translate;
-          // Ensure snapped position is still on grid
-          if (yPos < GRID_OFFSET) {
-            yPos = GRID_OFFSET;
+        yPos = Math.round(yPos / snap.translate) * snap.translate;
+        // Ensure snapped position is still on grid
+        if (yPos < GRID_OFFSET) {
+          yPos = GRID_OFFSET;
           }
         }
         
@@ -1331,14 +1506,14 @@ function TransformControlWrapper({
         } else {
           // Apply normal rotation snapping for other components
           rot = [
-            Math.round(obj.rotation.x / snap.rotate) * snap.rotate,
-            Math.round(obj.rotation.y / snap.rotate) * snap.rotate,
-            Math.round(obj.rotation.z / snap.rotate) * snap.rotate
-          ] as [number, number, number];
+          Math.round(obj.rotation.x / snap.rotate) * snap.rotate,
+          Math.round(obj.rotation.y / snap.rotate) * snap.rotate,
+          Math.round(obj.rotation.z / snap.rotate) * snap.rotate
+        ] as [number, number, number];
         }
         onUpdate(pos, rot);
       }}
-          />
+        />
         );
       })()}
     </>
@@ -1823,7 +1998,7 @@ export const Scene = ({
             hasGL: !!glRef.current
           });
         }
-
+        
         // Normalize bounding_box format if provided
         let normalizedBoundingBox = component.bounding_box || null;
         if (normalizedBoundingBox) {
@@ -2143,7 +2318,7 @@ export const Scene = ({
               gl.shadowMap.autoUpdate = true;
               break;
             case 'medium':
-              gl.shadowMap.type = THREE.PCFSoftShadowMap;
+          gl.shadowMap.type = THREE.PCFSoftShadowMap;
               gl.shadowMap.autoUpdate = true;
               break;
             case 'low':
@@ -2423,6 +2598,7 @@ export const Scene = ({
                 snap={snap}
                 onUpdate={(pos, rot) => onUpdateComponent(comp.id, { position: pos, rotation: rot })}
                 showCoordinateSystem={sceneSettings?.coordinateSystem === true}
+                orbitControlsRef={controlsRef}
               >
                 {content}
               </TransformControlWrapper>

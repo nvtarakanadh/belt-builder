@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { API_BASE } from "@/lib/config";
+import { apiRequest } from "@/lib/api";
 
 export interface Project {
   id: number;
@@ -56,11 +57,13 @@ export const useProjectActions = () => {
 
   const deleteProject = useMutation({
     mutationFn: async (projectId: number) => {
-      const response = await fetch(`${API_BASE}/api/projects/${projectId}/`, {
+      const response = await apiRequest(`/api/projects/${projectId}/`, {
         method: "DELETE",
-        credentials: "include",
       });
-      if (!response.ok) throw new Error("Failed to delete project");
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText || "Failed to delete project");
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["projects"] });
