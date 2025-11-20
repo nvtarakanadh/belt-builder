@@ -1084,13 +1084,18 @@ function TransformControlWrapper({
   // Update group position/rotation when component changes (but not while dragging)
   useEffect(() => {
     if (groupRef.current && !isDraggingRef.current) {
-      // Check if this is a CM component - lock Y to 1.00
-      const isCM = (component.name || '').toLowerCase() === 'cm';
+      // Check component type for Y position constraints
+      const componentName = (component.name || '').toLowerCase();
+      const isCM = componentName === 'cm';
+      const isWheelWithBreak = componentName.includes('wheel') && componentName.includes('break');
       let constrainedY = component.position[1];
       
       if (isCM) {
         // CM must always be at Y: 1.00
         constrainedY = 1.00;
+      } else if (isWheelWithBreak) {
+        // Wheel with Break must always be at Y: 0.10
+        constrainedY = 0.10;
       } else {
         // Ensure Y position is at least GRID_OFFSET (on grid) for other components
         constrainedY = Math.max(component.position[1], GRID_OFFSET);
@@ -1114,10 +1119,12 @@ function TransformControlWrapper({
     
     const controls = controlsRef.current;
     const group = groupRef.current;
-    const isCM = (component.name || '').toLowerCase() === 'cm';
+    const componentName = (component.name || '').toLowerCase();
+    const isCM = componentName === 'cm';
+    const isWheelWithBreak = componentName.includes('wheel') && componentName.includes('break');
     
-    // Disable Y-axis movement for CM components by hiding the Y handle
-    if (controls && isCM) {
+    // Disable Y-axis movement for CM and Wheel with Break components by hiding the Y handle
+    if (controls && (isCM || isWheelWithBreak)) {
       // The showY prop will be set in the JSX, but we can also disable it here
       // This ensures the Y-axis handle is hidden
     }
@@ -1131,6 +1138,11 @@ function TransformControlWrapper({
         if (isCM) {
           // CM must always be at Y: 1.00
           group.position.y = 1.00;
+          group.updateMatrixWorld();
+          controls.updateMatrixWorld();
+        } else if (isWheelWithBreak) {
+          // Wheel with Break must always be at Y: 0.10
+          group.position.y = 0.10;
           group.updateMatrixWorld();
           controls.updateMatrixWorld();
         } else if (group.position.y < GRID_OFFSET) {
@@ -1149,6 +1161,17 @@ function TransformControlWrapper({
           // Prevent both above and below Y: 1.00
           if (group.position.y !== 1.00) {
             group.position.y = 1.00;
+            group.updateMatrixWorld();
+            // Force update controls to reflect the locked position
+            if (controlsRef.current) {
+              controlsRef.current.updateMatrixWorld();
+            }
+          }
+        } else if (isWheelWithBreak) {
+          // Wheel with Break must always be at Y: 0.10, even while dragging
+          // Prevent both above and below Y: 0.10
+          if (group.position.y !== 0.10) {
+            group.position.y = 0.10;
             group.updateMatrixWorld();
             // Force update controls to reflect the locked position
             if (controlsRef.current) {
@@ -1202,7 +1225,9 @@ function TransformControlWrapper({
         )}
       </group>
       {groupObject && (() => {
-        const isCM = (component.name || '').toLowerCase() === 'cm';
+        const componentName = (component.name || '').toLowerCase();
+        const isCM = componentName === 'cm';
+        const isWheelWithBreak = componentName.includes('wheel') && componentName.includes('break');
         return (
           <TransformControls
             ref={controlsRef}
@@ -1213,7 +1238,7 @@ function TransformControlWrapper({
             rotationSnap={snap.rotate}
             scaleSnap={snap.scale}
             showX={true}
-            showY={!isCM} // Hide Y-axis handle for CM components to prevent vertical movement
+            showY={!(isCM || isWheelWithBreak)} // Hide Y-axis handle for CM and Wheel with Break components to prevent vertical movement
             showZ={true}
       onObjectChange={(e) => {
             const obj = groupRef.current;
@@ -1221,7 +1246,7 @@ function TransformControlWrapper({
         
         // Get position and rotation from the group being controlled
         const GRID_OFFSET = 0; // Ensure components stay on grid
-        // isCM is already declared in the outer scope
+        // isCM and isWheelWithBreak are already declared in the outer scope
         
         // Constrain Y position based on component type
         let yPos = obj.position.y;
@@ -1230,6 +1255,16 @@ function TransformControlWrapper({
           // Force position to exactly 1.00 regardless of user input
           yPos = 1.00;
           obj.position.y = 1.00;
+          obj.updateMatrixWorld();
+          // Force update controls to prevent visual glitches
+          if (controlsRef.current) {
+            controlsRef.current.updateMatrixWorld();
+          }
+        } else if (isWheelWithBreak) {
+          // Wheel with Break must always be locked at Y: 0.10 - prevent both above and below
+          // Force position to exactly 0.10 regardless of user input
+          yPos = 0.10;
+          obj.position.y = 0.10;
           obj.updateMatrixWorld();
           // Force update controls to prevent visual glitches
           if (controlsRef.current) {
@@ -1802,13 +1837,15 @@ export const Scene = ({
         const componentCategory = (component.category || '').toLowerCase();
         const isCM = componentName === 'cm';
         const isRod = componentName.includes('rod') || componentCategory.includes('rod');
+        const isWheelWithBreak = componentName.includes('wheel') && componentName.includes('break');
         
         // Debug logging
         console.log('Component placement:', {
           name: component.name,
           category: component.category,
           isRod,
-          isCM
+          isCM,
+          isWheelWithBreak
         });
         
         let adjustedY: number;
@@ -1819,6 +1856,10 @@ export const Scene = ({
         } else if (isCM) {
           // CM component should be placed at Y: 1.00
           adjustedY = 1.00;
+        } else if (isWheelWithBreak) {
+          // Wheel with Break component should be placed at Y: 0.10
+          adjustedY = 0.10;
+          console.log('Placing Wheel with Break at Y: 0.10');
         } else {
           // Adjust Y position so the component's bottom sits at Y=0 (grid level)
           // Use drop X and Z positions, but always snap Y to grid based on bounding box
@@ -2348,14 +2389,23 @@ export const Scene = ({
           }
 
           // Return the component group directly (no transform controls)
-          // Position is already calculated so bottom sits on grid (Y=0) or special positions (rod: 1.40, CM: 1.00)
-          // CM must always be locked at Y: 1.00
-          const isRod = (comp.name || '').toLowerCase().includes('rod') || 
+          // Position is already calculated so bottom sits on grid (Y=0) or special positions (rod: 1.40, CM: 1.00, Wheel with Break: 0.10)
+          // CM must always be locked at Y: 1.00, Wheel with Break at Y: 0.10
+          const componentName = (comp.name || '').toLowerCase();
+          const isRod = componentName.includes('rod') || 
                        (comp.category || '').toLowerCase().includes('rod');
-          const isCM = (comp.name || '').toLowerCase() === 'cm';
+          const isCM = componentName === 'cm';
+          const isWheelWithBreak = componentName.includes('wheel') && componentName.includes('break');
           const GRID_OFFSET = 0;
-          // CM is locked at Y: 1.00, rod can be above grid, others constrained to be at least on grid
-          const constrainedY = isCM ? 1.00 : (isRod ? comp.position[1] : Math.max(comp.position[1], GRID_OFFSET));
+          // CM is locked at Y: 1.00, Wheel with Break at Y: 0.10, rod can be above grid, others constrained to be at least on grid
+          let constrainedY: number;
+          if (isCM) {
+            constrainedY = 1.00;
+          } else if (isWheelWithBreak) {
+            constrainedY = 0.10;
+          } else {
+            constrainedY = isRod ? comp.position[1] : Math.max(comp.position[1], GRID_OFFSET);
+          }
           const isSelected = selectedId === comp.id;
           return (
             <group 
