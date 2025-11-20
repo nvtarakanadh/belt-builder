@@ -1,7 +1,5 @@
-import { useState, useRef, useEffect, useCallback, Suspense, useMemo } from 'react';
-import { Canvas, useThree, useFrame } from '@react-three/fiber';
-import { OrbitControls, PerspectiveCamera, OrthographicCamera } from '@react-three/drei';
-import * as THREE from 'three';
+import { useState, useEffect, useCallback } from 'react';
+import { useTheme } from 'next-themes';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
@@ -13,6 +11,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Separator } from '@/components/ui/separator';
+import { Moon, Sun } from 'lucide-react';
 
 export interface SceneSettings {
   viewMode: 'realistic' | 'orthographic' | 'wireframe';
@@ -35,7 +34,7 @@ export const DEFAULT_SETTINGS: SceneSettings = {
   shadows: true,
   placementPreview: true,
   coordinateSystem: false,
-  cameraCube: false,
+  cameraCube: true, // Camera cube visible by default
   grid: true,
   fpsCounter: false,
 };
@@ -48,158 +47,6 @@ interface SettingsPanelProps {
   onResetSettings?: () => void;
 }
 
-// Interactive cube widget component
-function InteractiveCube({ 
-  onFaceClick,
-  cameraRef 
-}: { 
-  onFaceClick: (face: string) => void;
-  cameraRef: React.MutableRefObject<THREE.Camera | null>;
-}) {
-  const { camera, gl } = useThree();
-  const cubeRef = useRef<THREE.Mesh>(null);
-  const isDragging = useRef(false);
-  const lastMousePos = useRef({ x: 0, y: 0 });
-  const raycaster = useRef(new THREE.Raycaster());
-  const mouse = useRef(new THREE.Vector2());
-  const autoRotate = useRef(true);
-
-  // Update camera ref
-  useEffect(() => {
-    if (camera) {
-      cameraRef.current = camera;
-    }
-  }, [camera, cameraRef]);
-
-  // Handle mouse interactions
-  useEffect(() => {
-    const canvas = gl.domElement;
-    
-    const handlePointerDown = (e: PointerEvent) => {
-      if (!cubeRef.current) return;
-      
-      const rect = canvas.getBoundingClientRect();
-      mouse.current.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-      mouse.current.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-      
-      raycaster.current.setFromCamera(mouse.current, camera);
-      const intersects = raycaster.current.intersectObject(cubeRef.current);
-      
-      if (intersects.length > 0) {
-        isDragging.current = true;
-        autoRotate.current = false;
-        lastMousePos.current = { x: e.clientX, y: e.clientY };
-        canvas.style.cursor = 'grabbing';
-        e.preventDefault();
-      }
-    };
-
-    const handlePointerMove = (e: PointerEvent) => {
-      if (isDragging.current && cubeRef.current) {
-        const deltaX = e.clientX - lastMousePos.current.x;
-        const deltaY = e.clientY - lastMousePos.current.y;
-        
-        cubeRef.current.rotation.y += deltaX * 0.01;
-        cubeRef.current.rotation.x += deltaY * 0.01;
-        
-        lastMousePos.current = { x: e.clientX, y: e.clientY };
-      }
-    };
-
-    const handlePointerUp = (e: PointerEvent) => {
-      if (isDragging.current && cubeRef.current) {
-        // Check if we clicked on a face (not dragged)
-        const moved = Math.abs(e.clientX - lastMousePos.current.x) < 5 && 
-                     Math.abs(e.clientY - lastMousePos.current.y) < 5;
-        
-        if (moved) {
-          const rect = canvas.getBoundingClientRect();
-          mouse.current.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-          mouse.current.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-          
-          raycaster.current.setFromCamera(mouse.current, camera);
-          const intersects = raycaster.current.intersectObject(cubeRef.current);
-          
-          if (intersects.length > 0) {
-            const face = intersects[0].face;
-            if (face) {
-              // Transform normal to world space
-              const normal = face.normal.clone();
-              if (cubeRef.current.matrixWorld) {
-                normal.transformDirection(cubeRef.current.matrixWorld);
-              }
-              
-              // Determine which face was clicked
-              const absX = Math.abs(normal.x);
-              const absY = Math.abs(normal.y);
-              const absZ = Math.abs(normal.z);
-              
-              let faceName = 'front';
-              if (absX > absY && absX > absZ) {
-                faceName = normal.x > 0 ? 'right' : 'left';
-              } else if (absY > absX && absY > absZ) {
-                faceName = normal.y > 0 ? 'top' : 'bottom';
-              } else {
-                faceName = normal.z > 0 ? 'back' : 'front';
-              }
-              
-              onFaceClick(faceName);
-            }
-          }
-        }
-        
-        isDragging.current = false;
-        autoRotate.current = true;
-        canvas.style.cursor = 'grab';
-      }
-    };
-
-    canvas.addEventListener('pointerdown', handlePointerDown);
-    window.addEventListener('pointermove', handlePointerMove);
-    window.addEventListener('pointerup', handlePointerUp);
-    
-    canvas.style.cursor = 'grab';
-
-    return () => {
-      canvas.removeEventListener('pointerdown', handlePointerDown);
-      window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('pointerup', handlePointerUp);
-      canvas.style.cursor = 'default';
-    };
-  }, [camera, gl, onFaceClick]);
-
-  // Auto-rotate when not dragging
-  useFrame((state, delta) => {
-    if (cubeRef.current && autoRotate.current && !isDragging.current) {
-      cubeRef.current.rotation.y += delta * 0.3;
-    }
-  });
-
-  return (
-    <mesh ref={cubeRef}>
-      <boxGeometry args={[1, 1, 1]} />
-      <meshStandardMaterial 
-        color="#00b4d8"
-        metalness={0.3}
-        roughness={0.4}
-      />
-      <Edges />
-    </mesh>
-  );
-}
-
-// Edges helper component
-function Edges() {
-  const boxGeometry = useMemo(() => new THREE.BoxGeometry(1, 1, 1), []);
-  
-  return (
-    <lineSegments>
-      <edgesGeometry args={[boxGeometry]} />
-      <lineBasicMaterial color="#ffffff" linewidth={1} />
-    </lineSegments>
-  );
-}
-
 // FPS Counter component (will be rendered in Scene, not here)
 
 export function SettingsPanel({
@@ -210,12 +57,18 @@ export function SettingsPanel({
   onResetSettings,
 }: SettingsPanelProps) {
   const [localSettings, setLocalSettings] = useState<SceneSettings>(settings);
-  const cubeCameraRef = useRef<THREE.Camera | null>(null);
+  const { theme, setTheme } = useTheme();
+  const [mounted, setMounted] = useState(false);
 
   // Sync local settings with props
   useEffect(() => {
     setLocalSettings(settings);
   }, [settings]);
+
+  // Handle theme mounting to avoid hydration mismatch
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const updateSetting = useCallback((key: keyof SceneSettings, value: any) => {
     const newSettings = { ...localSettings, [key]: value };
@@ -229,11 +82,6 @@ export function SettingsPanel({
     onResetSettings?.();
   }, [onSettingsChange, onResetSettings]);
 
-  const handleCubeFaceClick = useCallback((face: string) => {
-    // This will be handled by the parent component to change camera angle
-    console.log('Cube face clicked:', face);
-    // You can emit an event or call a callback here
-  }, []);
 
   if (!open) return null;
 
@@ -323,10 +171,36 @@ export function SettingsPanel({
 
         <Separator />
 
-        {/* Toggles */}
-        <div className="space-y-4">
+        {/* Display Options */}
+        <div className="space-y-3">
+          <h3 className="text-sm font-semibold text-foreground">Display</h3>
+          
+          {/* Theme Toggle */}
           <div className="flex items-center justify-between">
-            <Label htmlFor="shadows">Shadow</Label>
+            <div className="space-y-0.5">
+              <Label htmlFor="theme" className="cursor-pointer">Theme</Label>
+              <p className="text-xs text-muted-foreground">Switch between light and dark mode</p>
+            </div>
+            <Button
+              id="theme"
+              variant="outline"
+              size="sm"
+              onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+              className="w-10 h-10 p-0"
+            >
+              {mounted && theme === 'dark' ? (
+                <Sun className="h-4 w-4" />
+              ) : (
+                <Moon className="h-4 w-4" />
+              )}
+            </Button>
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div className="space-y-0.5">
+              <Label htmlFor="shadows" className="cursor-pointer">Shadow</Label>
+              <p className="text-xs text-muted-foreground">Enable shadow rendering</p>
+            </div>
             <Switch
               id="shadows"
               checked={localSettings.shadows}
@@ -335,34 +209,10 @@ export function SettingsPanel({
           </div>
 
           <div className="flex items-center justify-between">
-            <Label htmlFor="placement-preview">Placement preview</Label>
-            <Switch
-              id="placement-preview"
-              checked={localSettings.placementPreview}
-              onCheckedChange={(checked) => updateSetting('placementPreview', checked)}
-            />
-          </div>
-
-          <div className="flex items-center justify-between">
-            <Label htmlFor="coordinate-system">Coordinate system</Label>
-            <Switch
-              id="coordinate-system"
-              checked={localSettings.coordinateSystem}
-              onCheckedChange={(checked) => updateSetting('coordinateSystem', checked)}
-            />
-          </div>
-
-          <div className="flex items-center justify-between">
-            <Label htmlFor="camera-cube">Camera cube</Label>
-            <Switch
-              id="camera-cube"
-              checked={localSettings.cameraCube}
-              onCheckedChange={(checked) => updateSetting('cameraCube', checked)}
-            />
-          </div>
-
-          <div className="flex items-center justify-between">
-            <Label htmlFor="grid">Grid</Label>
+            <div className="space-y-0.5">
+              <Label htmlFor="grid" className="cursor-pointer">Grid</Label>
+              <p className="text-xs text-muted-foreground">Show grid floor</p>
+            </div>
             <Switch
               id="grid"
               checked={localSettings.grid}
@@ -371,7 +221,22 @@ export function SettingsPanel({
           </div>
 
           <div className="flex items-center justify-between">
-            <Label htmlFor="fps-counter">FPS counter</Label>
+            <div className="space-y-0.5">
+              <Label htmlFor="coordinate-system" className="cursor-pointer">Coordinate system</Label>
+              <p className="text-xs text-muted-foreground">Show XYZ axes helper</p>
+            </div>
+            <Switch
+              id="coordinate-system"
+              checked={localSettings.coordinateSystem}
+              onCheckedChange={(checked) => updateSetting('coordinateSystem', checked)}
+            />
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div className="space-y-0.5">
+              <Label htmlFor="fps-counter" className="cursor-pointer">FPS counter</Label>
+              <p className="text-xs text-muted-foreground">Show performance counter</p>
+            </div>
             <Switch
               id="fps-counter"
               checked={localSettings.fpsCounter}
@@ -382,27 +247,20 @@ export function SettingsPanel({
 
         <Separator />
 
-        {/* Interactive Cube Preview */}
-        <div className="space-y-2">
-          <Label>Camera Preview</Label>
-          <div className="w-full h-48 bg-secondary/30 rounded-lg border border-border/50 overflow-hidden relative">
-            <Canvas
-              camera={{ position: [2, 2, 2], fov: 50 }}
-              gl={{ antialias: true }}
-            >
-              <ambientLight intensity={0.5} />
-              <directionalLight position={[5, 5, 5]} intensity={0.8} />
-              <pointLight position={[-5, 5, -5]} intensity={0.3} />
-              <InteractiveCube
-                onFaceClick={handleCubeFaceClick}
-                cameraRef={cubeCameraRef}
-              />
-              <OrbitControls
-                enableZoom={false}
-                enablePan={false}
-                enableRotate={false}
-              />
-            </Canvas>
+        {/* Interaction Options */}
+        <div className="space-y-3">
+          <h3 className="text-sm font-semibold text-foreground">Interaction</h3>
+          
+          <div className="flex items-center justify-between">
+            <div className="space-y-0.5">
+              <Label htmlFor="placement-preview" className="cursor-pointer">Placement preview</Label>
+              <p className="text-xs text-muted-foreground">Show preview when placing components</p>
+            </div>
+            <Switch
+              id="placement-preview"
+              checked={localSettings.placementPreview}
+              onCheckedChange={(checked) => updateSetting('placementPreview', checked)}
+            />
           </div>
         </div>
       </div>

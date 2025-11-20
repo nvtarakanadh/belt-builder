@@ -8,7 +8,50 @@ All colors MUST be HSL.
 
 @layer base {
   :root {
-    /* Design tokens: bg:#0F1115, card:#151922, text:#E6E9EF, subtext:#A1A8B3, accent:#2EE59D, border:#222632 */
+    /* Light theme - Design tokens */
+    --background: 0 0% 100%; /* #FFFFFF */
+    --foreground: 220 20% 10%; /* Dark text */
+
+    --card: 0 0% 98%; /* Very light gray */
+    --card-foreground: 220 20% 10%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 20% 10%;
+
+    --primary: 190 100% 42%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 220 10% 95%;
+    --secondary-foreground: 220 20% 10%;
+
+    --muted: 220 10% 96%;
+    --muted-foreground: 220 10% 45%;
+
+    --accent: 158 84% 51%; /* #2EE59D */
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 70% 50%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 10% 85%; /* Light border */
+    --input: 220 10% 96%;
+    --ring: 158 84% 51%; /* accent color */
+
+    --radius: 1rem; /* xl */
+
+    --panel-glass: 0 0% 100% / 0.9;
+    --panel-border: 190 100% 42% / 0.2;
+    
+    --grid-line: 220 10% 90%;
+    --grid-accent: 190 100% 42% / 0.2;
+    
+    --success: 142 76% 36%;
+    --warning: 38 92% 50%;
+    --info: 199 89% 48%;
+  }
+
+  .dark {
+    /* Dark theme - Design tokens: bg:#0F1115, card:#151922, text:#E6E9EF, subtext:#A1A8B3, accent:#2EE59D, border:#222632 */
     --background: 220 25% 6%; /* #0F1115 */
     --foreground: 220 20% 92%; /* #E6E9EF */
 
@@ -36,8 +79,6 @@ All colors MUST be HSL.
     --border: 220 15% 20%; /* #222632 */
     --input: 220 15% 16%;
     --ring: 158 84% 51%; /* accent color */
-
-    --radius: 1rem; /* xl */
 
     --panel-glass: 220 20% 12% / 0.8;
     --panel-border: 190 100% 42% / 0.2;

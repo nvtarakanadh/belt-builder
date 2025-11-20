@@ -1,9 +1,16 @@
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
 import { useEffect, useMemo, useState } from "react";
-import { Box, Circle, Zap, Grid3x3, Settings, ChevronLeft, ChevronRight } from "lucide-react";
+import { Box, Circle, Zap, Grid3x3, Settings, ChevronLeft, ChevronRight, ChevronDown, ChevronUp } from "lucide-react";
 import { ComponentLibraryPreview } from "@/components/ComponentLibraryPreview";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
 
 type BackendComponent = {
   id: number;
@@ -57,6 +64,7 @@ export const ComponentLibrary = ({ collapsed = false, onToggleCollapse }: Compon
       case "roller":
         return Circle;
       case "belt":
+      case "conveyor":
         return Grid3x3;
       case "frame":
       case "base":
@@ -65,6 +73,30 @@ export const ComponentLibrary = ({ collapsed = false, onToggleCollapse }: Compon
         return Settings;
     }
   };
+
+  // Group components by category
+  const groupedComponents = useMemo(() => {
+    const groups: Record<string, BackendComponent[]> = {};
+    
+    items.forEach((component) => {
+      const category = component.category || component.category_label || component.type || "Uncategorized";
+      const normalizedCategory = category.trim() || "Uncategorized";
+      
+      if (!groups[normalizedCategory]) {
+        groups[normalizedCategory] = [];
+      }
+      groups[normalizedCategory].push(component);
+    });
+    
+    // Sort categories alphabetically, but put "Uncategorized" at the end
+    const sortedCategories = Object.keys(groups).sort((a, b) => {
+      if (a === "Uncategorized") return 1;
+      if (b === "Uncategorized") return -1;
+      return a.localeCompare(b);
+    });
+    
+    return { groups, sortedCategories };
+  }, [items]);
 
   return (
     <div className={`panel-glass h-full flex flex-col transition-all ${collapsed ? 'w-12' : 'w-80'}`}>
@@ -84,17 +116,40 @@ export const ComponentLibrary = ({ collapsed = false, onToggleCollapse }: Compon
       </div>
       
       <div className="flex-1 overflow-y-auto overflow-x-visible">
-        <div className={`p-4 space-y-2 ${collapsed ? 'hidden' : ''}`}>
+        <div className={`p-4 ${collapsed ? 'hidden' : ''}`}>
           {loading && <div className="text-xs text-muted-foreground">Loading components…</div>}
           {error && <div className="text-xs text-red-500">{error}</div>}
-          {!loading && !error && items.map((component) => {
-            const category = component.category || component.category_label || component.type || "";
-            const Icon = iconForCategory(category);
-            return (
-              <Card 
-                key={component.id}
-                className="p-3 cursor-move hover:bg-secondary transition-smooth hover:border-primary overflow-visible"
-                draggable={true}
+          {!loading && !error && (
+            <Accordion type="multiple" defaultValue={groupedComponents.sortedCategories} className="w-full">
+              {groupedComponents.sortedCategories.map((category, categoryIndex) => {
+                const categoryComponents = groupedComponents.groups[category];
+                const Icon = iconForCategory(category);
+                
+                return (
+                  <div key={category}>
+                    {categoryIndex > 0 && <Separator className="my-2" />}
+                    <AccordionItem value={category} className="border-none">
+                      <AccordionTrigger className="py-2 hover:no-underline">
+                        <div className="flex items-center gap-2 flex-1">
+                          <Icon className="h-4 w-4 text-primary" />
+                          <span className="font-medium text-sm">{category}</span>
+                          <Badge variant="secondary" className="ml-auto text-xs">
+                            {categoryComponents.length}
+                          </Badge>
+                        </div>
+                      </AccordionTrigger>
+                      <AccordionContent className="pt-2 pb-4">
+                        <div className="space-y-2">
+                        {categoryComponents.map((component, componentIndex) => {
+                          const componentCategory = component.category || component.category_label || component.type || "";
+                          const ComponentIcon = iconForCategory(componentCategory);
+                          return (
+                            <div key={component.id}>
+                              {componentIndex > 0 && <Separator className="my-2" />}
+                              <Card 
+                              key={component.id}
+                              className="p-3 cursor-move hover:bg-secondary transition-smooth hover:border-primary overflow-visible"
+                              draggable={true}
                 onDragStart={(e) => {
                   try {
                     // Ensure URLs are absolute
@@ -132,7 +187,7 @@ export const ComponentLibrary = ({ collapsed = false, onToggleCollapse }: Compon
                     const dragData = {
                       id: component.id,
                       name: component.name || 'Unnamed Component',
-                      category: category || 'unknown',
+                      category: componentCategory || 'unknown',
                       glb_url: glbUrl,
                       original_url: originalUrl,
                       bounding_box: normalizedBoundingBox,
@@ -264,7 +319,7 @@ export const ComponentLibrary = ({ collapsed = false, onToggleCollapse }: Compon
                         }
                         return url;
                       })()}
-                      category={category}
+                      category={componentCategory}
                       apiBase={API_BASE}
                     />
                   </div>
@@ -272,14 +327,11 @@ export const ComponentLibrary = ({ collapsed = false, onToggleCollapse }: Compon
                   {/* Component Info */}
                   <div className="flex items-start gap-3">
                     <div className="p-2 rounded-lg bg-primary/10 shrink-0">
-                      <Icon className="h-4 w-4 text-primary" />
+                      <ComponentIcon className="h-4 w-4 text-primary" />
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between gap-2">
                         <h3 className="font-medium text-sm truncate">{component.name}</h3>
-                        <Badge variant="outline" className="text-xs">
-                          {category}
-                        </Badge>
                       </div>
                       {component.glb_url && (
                         <p className="text-[10px] text-muted-foreground mt-1 truncate">GLB ready</p>
@@ -288,8 +340,17 @@ export const ComponentLibrary = ({ collapsed = false, onToggleCollapse }: Compon
                   </div>
                 </div>
               </Card>
-            );
-          })}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </AccordionContent>
+                  </AccordionItem>
+                  </div>
+                );
+              })}
+            </Accordion>
+          )}
         </div>
       </div>
     </div>

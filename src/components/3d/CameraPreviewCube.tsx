@@ -1,19 +1,24 @@
 import { useRef, useEffect, useState, useMemo } from 'react';
 import { Canvas, useThree, useFrame } from '@react-three/fiber';
-import { OrbitControls } from '@react-three/drei';
+import { OrbitControls, Html, Text } from '@react-three/drei';
 import * as THREE from 'three';
+import { useTheme } from 'next-themes';
 
 interface CameraPreviewCubeProps {
   onFaceClick: (face: string) => void;
   mainCamera?: THREE.Camera | null;
   mainControls?: any;
+  theme?: string;
+  onCubeRotate?: (rotation: { x: number; y: number; z: number }) => void;
 }
 
 // Interactive cube component
 function InteractiveCube({ 
   onFaceClick,
   mainCamera,
-  mainControls
+  mainControls,
+  theme = 'dark',
+  onCubeRotate
 }: CameraPreviewCubeProps) {
   const { camera, gl } = useThree();
   const cubeRef = useRef<THREE.Mesh>(null);
@@ -23,28 +28,33 @@ function InteractiveCube({
   const mouse = useRef(new THREE.Vector2());
   const autoRotate = useRef(true);
   const [isHovered, setIsHovered] = useState(false);
+  
+  const isDark = theme === 'dark';
+  const cubeColor = isDark ? (isHovered ? "#00d4ff" : "#00b4d8") : (isHovered ? "#0066cc" : "#0088dd");
+  const textColor = isDark ? "#ffffff" : "#000000";
 
   // Sync cube rotation with main camera orientation
   useFrame(() => {
-    if (!mainCamera || !cubeRef.current || isDragging.current) return;
+    if (!mainCamera || !cubeRef.current || isDragging.current || !mainControls) return;
     
-    // Calculate rotation based on camera direction
-    const direction = new THREE.Vector3();
-    mainCamera.getWorldDirection(direction);
+    // Get camera position and target to calculate rotation
+    const target = mainControls.target ? mainControls.target.clone() : new THREE.Vector3(0, 0, 0);
+    const direction = new THREE.Vector3()
+      .subVectors(mainCamera.position, target)
+      .normalize();
     
-    // Convert camera direction to cube rotation
-    // The cube represents the view direction, so we rotate it to match
-    const angleY = Math.atan2(direction.x, direction.z);
-    const angleX = -Math.asin(Math.max(-1, Math.min(1, direction.y)));
+    // Convert direction to spherical coordinates (phi, theta)
+    const phi = Math.acos(Math.max(-1, Math.min(1, direction.y))); // Vertical angle
+    const theta = Math.atan2(direction.x, direction.z); // Horizontal angle
     
-    // Smoothly interpolate cube rotation to match camera
+    // Apply rotation to cube (smoothly interpolate)
     if (cubeRef.current) {
-      const targetY = angleY;
-      const targetX = angleX * 0.5; // Scale down X rotation for better visual
+      const lerpFactor = 0.3; // Responsive tracking
+      const targetX = phi - Math.PI / 2; // Adjust for cube orientation
+      const targetY = theta;
       
-      // Smooth interpolation
-      cubeRef.current.rotation.y += (targetY - cubeRef.current.rotation.y) * 0.1;
-      cubeRef.current.rotation.x += (targetX - cubeRef.current.rotation.x) * 0.1;
+      cubeRef.current.rotation.x += (targetX - cubeRef.current.rotation.x) * lerpFactor;
+      cubeRef.current.rotation.y += (targetY - cubeRef.current.rotation.y) * lerpFactor;
     }
   });
 
@@ -73,12 +83,50 @@ function InteractiveCube({
     };
 
     const handlePointerMove = (e: PointerEvent) => {
-      if (isDragging.current && cubeRef.current) {
+      if (isDragging.current && cubeRef.current && mainCamera && mainControls) {
         const deltaX = e.clientX - lastMousePos.current.x;
         const deltaY = e.clientY - lastMousePos.current.y;
         
+        // Rotate the cube
         cubeRef.current.rotation.y += deltaX * 0.01;
         cubeRef.current.rotation.x += deltaY * 0.01;
+        
+        // Clamp X rotation to prevent flipping
+        cubeRef.current.rotation.x = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, cubeRef.current.rotation.x));
+        
+        // Rotate the main camera to match cube rotation
+        if (mainControls && mainCamera) {
+          const target = mainControls.target ? mainControls.target.clone() : new THREE.Vector3(0, 0, 0);
+          const distance = mainCamera.position.distanceTo(target);
+          
+          // Convert cube rotation to camera position using spherical coordinates
+          // phi: vertical angle (from Y axis), theta: horizontal angle (around Y axis)
+          const phi = cubeRef.current.rotation.x + Math.PI / 2; // Adjust for cube orientation
+          const theta = cubeRef.current.rotation.y;
+          
+          // Calculate new camera position
+          const x = target.x + distance * Math.sin(phi) * Math.cos(theta);
+          const y = target.y + distance * Math.cos(phi);
+          const z = target.z + distance * Math.sin(phi) * Math.sin(theta);
+          
+          const newPosition = new THREE.Vector3(x, y, z);
+          mainCamera.position.copy(newPosition);
+          mainCamera.lookAt(target);
+          
+          if (mainControls) {
+            mainControls.target.copy(target);
+            mainControls.update();
+          }
+          
+          // Notify parent of rotation change
+          if (onCubeRotate) {
+            onCubeRotate({
+              x: cubeRef.current.rotation.x,
+              y: cubeRef.current.rotation.y,
+              z: cubeRef.current.rotation.z
+            });
+          }
+        }
         
         lastMousePos.current = { x: e.clientX, y: e.clientY };
         e.stopPropagation();
@@ -173,16 +221,23 @@ function InteractiveCube({
       <mesh ref={cubeRef}>
         <primitive object={boxGeometry} />
         <meshStandardMaterial 
-          color={isHovered ? "#00d4ff" : "#00b4d8"}
-          metalness={0.3}
-          roughness={0.4}
-          emissive={isHovered ? new THREE.Color(0x00d4ff) : new THREE.Color(0x000000)}
-          emissiveIntensity={isHovered ? 0.2 : 0}
+          color={cubeColor}
+          metalness={0.6}
+          roughness={0.2}
+          emissive={isHovered ? new THREE.Color(cubeColor) : new THREE.Color(0x000000)}
+          emissiveIntensity={isHovered ? 0.4 : 0}
         />
       </mesh>
+      
+      {/* Add subtle edges for better visibility and user-friendliness */}
       <lineSegments>
         <edgesGeometry args={[boxGeometry]} />
-        <lineBasicMaterial color="#ffffff" linewidth={1} />
+        <lineBasicMaterial 
+          color={isDark ? "#ffffff" : "#000000"} 
+          opacity={0.4} 
+          transparent 
+          linewidth={2}
+        />
       </lineSegments>
     </group>
   );
@@ -194,8 +249,20 @@ export function CameraPreviewCube({
   mainCamera, 
   mainControls 
 }: CameraPreviewCubeProps) {
+  const { theme } = useTheme();
+  const [mounted, setMounted] = useState(false);
+  
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+  
+  const isDark = mounted ? theme === 'dark' : true;
+  const textColor = isDark ? "#ffffff" : "#000000";
+  const bgColor = isDark ? "rgba(0,0,0,0.4)" : "rgba(255,255,255,0.4)";
+  const borderColor = isDark ? "rgba(255,255,255,0.2)" : "rgba(0,0,0,0.2)";
+  
   return (
-    <div className="absolute bottom-4 right-4 w-32 h-32 bg-black/60 rounded-lg border border-border/50 overflow-hidden backdrop-blur-sm z-50">
+    <div className="absolute top-4 right-4 w-32 h-32 z-50 pointer-events-auto">
       <Canvas
         camera={{ position: [2, 2, 2], fov: 50 }}
         gl={{ antialias: true, alpha: true }}
@@ -207,6 +274,10 @@ export function CameraPreviewCube({
           onFaceClick={onFaceClick}
           mainCamera={mainCamera}
           mainControls={mainControls}
+          theme={mounted ? theme : 'dark'}
+          onCubeRotate={(rotation) => {
+            // Optional: handle rotation updates if needed
+          }}
         />
         <OrbitControls
           enableZoom={false}
@@ -214,6 +285,66 @@ export function CameraPreviewCube({
           enableRotate={false}
         />
       </Canvas>
+      
+      {/* 2D Labels overlay - positioned absolutely over the cube */}
+      <div className="absolute inset-0 pointer-events-none">
+        {/* TOP label - top center */}
+        <div 
+          className="absolute top-1 left-1/2 transform -translate-x-1/2"
+          style={{
+            color: textColor,
+            fontSize: '8px',
+            fontWeight: 'bold',
+            textShadow: isDark ? '0 0 3px rgba(0,0,0,0.9), 0 0 6px rgba(0,0,0,0.5)' : '0 0 3px rgba(255,255,255,0.9), 0 0 6px rgba(255,255,255,0.5)',
+            userSelect: 'none',
+            whiteSpace: 'nowrap',
+            background: bgColor,
+            padding: '2px 5px',
+            borderRadius: '3px',
+            border: `1px solid ${borderColor}`,
+          }}
+        >
+          TOP
+        </div>
+        
+        {/* LEFT label - left center */}
+        <div 
+          className="absolute top-1/2 left-1 transform -translate-y-1/2"
+          style={{
+            color: textColor,
+            fontSize: '8px',
+            fontWeight: 'bold',
+            textShadow: isDark ? '0 0 3px rgba(0,0,0,0.9), 0 0 6px rgba(0,0,0,0.5)' : '0 0 3px rgba(255,255,255,0.9), 0 0 6px rgba(255,255,255,0.5)',
+            userSelect: 'none',
+            whiteSpace: 'nowrap',
+            background: bgColor,
+            padding: '2px 5px',
+            borderRadius: '3px',
+            border: `1px solid ${borderColor}`,
+          }}
+        >
+          LEFT
+        </div>
+        
+        {/* RIGHT label - right center */}
+        <div 
+          className="absolute top-1/2 right-1 transform -translate-y-1/2"
+          style={{
+            color: textColor,
+            fontSize: '8px',
+            fontWeight: 'bold',
+            textShadow: isDark ? '0 0 3px rgba(0,0,0,0.9), 0 0 6px rgba(0,0,0,0.5)' : '0 0 3px rgba(255,255,255,0.9), 0 0 6px rgba(255,255,255,0.5)',
+            userSelect: 'none',
+            whiteSpace: 'nowrap',
+            background: bgColor,
+            padding: '2px 5px',
+            borderRadius: '3px',
+            border: `1px solid ${borderColor}`,
+          }}
+        >
+          RIGHT
+        </div>
+      </div>
     </div>
   );
 }

@@ -38,7 +38,8 @@ export default function SignUp() {
     setIsLoading(true);
 
     try {
-      const response = await fetch(`${API_BASE}/api/auth/register/`, {
+      const registerUrl = `${API_BASE}/api/auth/register/`;
+      const response = await fetch(registerUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -51,7 +52,17 @@ export default function SignUp() {
 
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
-        throw new Error(data.error || data.message || `Registration failed (${response.status})`);
+        const errorMessage = data.error || data.message || `Registration failed (${response.status})`;
+        
+        // Provide more helpful error message for 404
+        if (response.status === 404) {
+          throw new Error(
+            `Registration endpoint not found. Please ensure the backend server is running at ${API_BASE}. ` +
+            `Attempted URL: ${registerUrl}`
+          );
+        }
+        
+        throw new Error(errorMessage);
       }
 
       // Registration successful, redirect to login

@@ -678,7 +678,26 @@ const Builder = () => {
   };
 
   const handleUpdateComponent = async (id: string, update: Partial<SceneComponent>) => {
-    setSceneComponents(prev => prev.map(c => c.id === id ? { ...c, ...update } : c));
+    setSceneComponents(prev => prev.map(c => {
+      if (c.id === id) {
+        // Create a deep copy to ensure React detects nested object changes (like bounding_box)
+        const updated = { ...c, ...update };
+        // If bounding_box is being updated, ensure it's a new object reference
+        if (update.bounding_box) {
+          updated.bounding_box = {
+            min: [...(update.bounding_box.min || c.bounding_box?.min || [0, 0, 0])],
+            max: [...(update.bounding_box.max || c.bounding_box?.max || [0, 0, 0])]
+          };
+        }
+        console.log('🔄 handleUpdateComponent called:', {
+          id,
+          update,
+          newBoundingBox: updated.bounding_box
+        });
+        return updated;
+      }
+      return c;
+    }));
     
     // Auto-save is now handled by the global auto-save system
     // No need to save individual updates here - the useEffect will trigger auto-save
@@ -1150,6 +1169,7 @@ const Builder = () => {
             onUpdateComponent={handleUpdateComponent}
             activeTool={activeTool}
             controlsRef={sceneControlsRef}
+            sceneSettings={sceneSettings}
           />
         {/* Save button removed - now in Toolbar */}
         </div>
@@ -1227,6 +1247,8 @@ const Builder = () => {
                         const validHeight = Math.max(newHeight, 1);
                         const validLength = Math.max(newLength, 1);
                         
+                        // Bounding box values are in mm, but we need to ensure they're properly formatted
+                        // The Scene component will convert mm to grid units (1 grid unit = 100mm)
                         const newBoundingBox = {
                           min: [
                             oldCenter[0] - validWidth / 2,
@@ -1239,6 +1261,12 @@ const Builder = () => {
                             oldCenter[2] + validLength / 2,
                           ],
                         };
+                        
+                        console.log('📏 Updating component dimensions:', {
+                          componentId: component.id,
+                          dimensions: { width: validWidth, height: validHeight, length: validLength },
+                          boundingBox: newBoundingBox
+                        });
                         
                         handleUpdateComponent(component.id, {
                           bounding_box: newBoundingBox,
