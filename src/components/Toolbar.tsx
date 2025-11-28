@@ -24,7 +24,8 @@ import {
   ZoomOut,
   Hand,
   Eraser,
-  Settings
+  Settings,
+  Trash2
 } from "lucide-react";
 
 interface ToolbarProps {
@@ -48,6 +49,8 @@ interface ToolbarProps {
   onErase?: () => void;
   onSettings?: () => void;
   panModeActive?: boolean;
+  onClearAll?: () => void;
+  isReadonly?: boolean;
 }
 
 export const Toolbar = ({ 
@@ -69,7 +72,9 @@ export const Toolbar = ({
   onPanMode,
   onErase,
   onSettings,
-  panModeActive = false
+  panModeActive = false,
+  onClearAll,
+  isReadonly = false
 }: ToolbarProps) => {
   return (
     <TooltipProvider>
@@ -275,16 +280,6 @@ export const Toolbar = ({
           </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon">
-                <Eye className="h-4 w-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>
-              <p>Toggle Visibility</p>
-            </TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
               <Button 
                 variant={viewMode === 'shopfloor' ? 'default' : 'ghost'} 
                 size="icon"
@@ -300,6 +295,23 @@ export const Toolbar = ({
         </div>
 
         <div className="ml-auto flex gap-2">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button 
+                variant="ghost" 
+                size="sm"
+                onClick={onClearAll}
+                disabled={isReadonly}
+                className="text-destructive hover:text-destructive hover:bg-destructive/10 disabled:opacity-50"
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                Clear All
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              <p>{isReadonly ? 'Clear All Components (Disabled in readonly mode)' : 'Clear All Components'}</p>
+            </TooltipContent>
+          </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
               <Button variant="ghost" size="sm">

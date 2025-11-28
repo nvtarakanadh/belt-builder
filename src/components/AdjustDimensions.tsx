@@ -12,6 +12,17 @@ interface AdjustDimensionsProps {
 }
 
 export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: AdjustDimensionsProps) => {
+  // Check if component is locked - if so, disable dimension editing
+  const isLocked = selectedComponent.isLocked || false;
+  
+  // Detect if this is a Vertical Rod or Horizontal Rod
+  const componentName = (selectedComponent.name || '').toLowerCase();
+  const componentCategory = (selectedComponent.type || '').toLowerCase();
+  const isRod = componentName.includes('rod') || componentCategory.includes('rod');
+  const isVerticalRod = (componentName.includes('vertical') && isRod) || (componentCategory.includes('vertical') && isRod);
+  const isHorizontalRod = (componentName.includes('horizontal') && isRod) || (componentCategory.includes('horizontal') && isRod);
+  const isRodType = isVerticalRod || isHorizontalRod;
+  
   // Realistic ranges for industrial conveyor components (in mm)
   const LENGTH_MIN = 350;   // 0.35m minimum
   const LENGTH_MAX = 4000;  // 4m maximum
@@ -19,7 +30,7 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
   const WIDTH_MAX = 500;    // 0.5m maximum
   const HEIGHT_MIN = 300;   // 0.3m minimum
   const HEIGHT_MAX = 1500;  // 1.5m maximum
-  const STEP_SIZE = 10;     // 10mm increments for precise adjustments
+  const STEP_SIZE = 1;     // 1mm increments for precise adjustments
 
   // Helper to round and clamp values for length
   const roundAndClampLength = (value: number): number => {
@@ -38,27 +49,38 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
 
   // Initialize state from selectedComponent dimensions
   const getInitialLength = () => {
-    // Use the dimension from selectedComponent if available, otherwise use a reasonable default
-    const val = selectedComponent.dimensions?.length;
+    // For vertical rods, use height dimension; for others, use length
+    let val;
+    if (isVerticalRod) {
+      val = selectedComponent.dimensions?.height;
+    } else {
+      val = selectedComponent.dimensions?.length;
+    }
     if (val !== undefined && val !== null && val > 0) {
       return roundAndClampLength(val);
     }
     // Default to midpoint of range if no dimension provided
     return roundAndClampLength((LENGTH_MIN + LENGTH_MAX) / 2);
   };
+  
   const getInitialWidth = () => {
+    // For rods, preserve width from dimensions
     const val = selectedComponent.dimensions?.width;
     if (val !== undefined && val !== null && val > 0) {
       return roundAndClampWidth(val);
     }
-    return roundAndClampWidth((WIDTH_MIN + WIDTH_MAX) / 2);
+    // For rods, use a small default width; for others, use midpoint
+    return isRodType ? roundAndClampWidth(50) : roundAndClampWidth((WIDTH_MIN + WIDTH_MAX) / 2);
   };
+  
   const getInitialHeight = () => {
+    // For rods, preserve height from dimensions (but vertical rods use length slider)
     const val = selectedComponent.dimensions?.height;
     if (val !== undefined && val !== null && val > 0) {
       return roundAndClampHeight(val);
     }
-    return roundAndClampHeight((HEIGHT_MIN + HEIGHT_MAX) / 2);
+    // For rods, use a small default height; for others, use midpoint
+    return isRodType ? roundAndClampHeight(50) : roundAndClampHeight((HEIGHT_MIN + HEIGHT_MAX) / 2);
   };
   
   const [length, setLength] = useState<number>(getInitialLength());
@@ -162,22 +184,34 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
     if (selectedComponent.id === componentId && !isUpdatingRef.current) {
       // Sync dimensions from parent only if they're significantly different
       // This prevents unnecessary re-renders while still allowing external updates
-      if (selectedComponent.dimensions.length !== undefined) {
-        const newLength = roundAndClampLength(selectedComponent.dimensions.length);
+      // For vertical rods, sync from height; for others, sync from length
+      const currentName = (selectedComponent.name || '').toLowerCase();
+      const currentCategory = (selectedComponent.type || '').toLowerCase();
+      const currentIsRod = currentName.includes('rod') || currentCategory.includes('rod');
+      const currentIsVerticalRod = (currentName.includes('vertical') && currentIsRod) || (currentCategory.includes('vertical') && currentIsRod);
+      
+      const dimensionToSync = currentIsVerticalRod 
+        ? selectedComponent.dimensions.height 
+        : selectedComponent.dimensions.length;
+      
+      if (dimensionToSync !== undefined) {
+        const newLength = roundAndClampLength(dimensionToSync);
         // Only update if the difference is significant (more than step size)
         if (Math.abs(newLength - lengthRef.current) > STEP_SIZE / 2) {
           lengthRef.current = newLength;
           setLength(newLength);
         }
       }
-      if (selectedComponent.dimensions.width !== undefined) {
+      // Don't sync width/height for rods to prevent flickering
+      if (!currentIsRod && selectedComponent.dimensions.width !== undefined) {
         const newWidth = roundAndClampWidth(selectedComponent.dimensions.width);
         if (Math.abs(newWidth - widthRef.current) > STEP_SIZE / 2) {
           widthRef.current = newWidth;
           setWidth(newWidth);
         }
       }
-      if (selectedComponent.dimensions.height !== undefined) {
+      // Don't sync height for rods (it's controlled by length slider for vertical rods)
+      if (!currentIsRod && selectedComponent.dimensions.height !== undefined) {
         const newHeight = roundAndClampHeight(selectedComponent.dimensions.height);
         if (Math.abs(newHeight - heightRef.current) > STEP_SIZE / 2) {
           heightRef.current = newHeight;
@@ -213,6 +247,14 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
       return;
     }
     
+    // For rods, only update length and preserve existing width/height
+    const currentName = (currentComponent.name || '').toLowerCase();
+    const currentCategory = (currentComponent.type || '').toLowerCase();
+    const currentIsRod = currentName.includes('rod') || currentCategory.includes('rod');
+    const currentIsVerticalRod = (currentName.includes('vertical') && currentIsRod) || (currentCategory.includes('vertical') && currentIsRod);
+    const currentIsHorizontalRod = (currentName.includes('horizontal') && currentIsRod) || (currentCategory.includes('horizontal') && currentIsRod);
+    const currentIsRodType = currentIsVerticalRod || currentIsHorizontalRod;
+    
     // Store what we're about to notify BEFORE calling onUpdateComponent
     lastNotifiedDimensionsRef.current = {
       length: clampedLength,
@@ -220,16 +262,31 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
       height: clampedHeight
     };
     
+    // For rods, we need to preserve the dimensions that aren't being changed
+    // Get the current dimensions, ensuring we have valid values
+    const currentWidth = currentComponent.dimensions?.width;
+    const currentHeight = currentComponent.dimensions?.height;
+    const currentLength = currentComponent.dimensions?.length;
+    
     const updatedComponent: ConveyorComponent = {
       ...currentComponent,
       dimensions: {
         ...currentComponent.dimensions,
-        length: clampedLength,
-        width: clampedWidth,
-        height: clampedHeight,
+        // For vertical rods: update height, preserve width and length from current dimensions
+        // For horizontal rods: update length, preserve width and height from current dimensions
+        // For other components: update all dimensions
+        length: currentIsVerticalRod 
+          ? (currentLength !== undefined && currentLength !== null ? currentLength : 50) // Preserve length for vertical rods
+          : (currentIsHorizontalRod ? clampedLength : clampedLength),
+        width: currentIsRodType 
+          ? (currentWidth !== undefined && currentWidth !== null ? currentWidth : 50) // Preserve width for all rods
+          : clampedWidth,
+        height: currentIsVerticalRod 
+          ? clampedLength // Update height for vertical rods (slider value maps to height)
+          : (currentIsHorizontalRod ? (currentHeight !== undefined && currentHeight !== null ? currentHeight : 50) : clampedHeight), // Preserve height for horizontal rods
       },
     };
-
+    
     // Set flag to prevent feedback loop
     isUpdatingRef.current = true;
     onUpdateComponent(updatedComponent);
@@ -429,12 +486,17 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
     <Card className="w-full">
       <CardHeader className="pb-3">
         <CardTitle className="text-base font-semibold">Adjust Dimensions</CardTitle>
+        {isLocked && (
+          <p className="text-xs text-muted-foreground mt-1">
+            🔒 Dimensions are locked - unlock to edit
+          </p>
+        )}
       </CardHeader>
       <CardContent className="space-y-6">
-        {/* Length Control */}
+        {/* Length Control - Show "Height" for Vertical Rods, "Length" for others */}
         <div className="space-y-3">
           <div className="flex items-center justify-between">
-            <Label className="text-sm font-medium">Length (mm)</Label>
+            <Label className="text-sm font-medium">{isVerticalRod ? 'Height (mm)' : 'Length (mm)'}</Label>
             <div className="flex items-center gap-2">
               <Button
                 type="button"
@@ -446,7 +508,7 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
                   e.stopPropagation();
                   handleLengthDecrement();
                 }}
-                disabled={length <= LENGTH_MIN}
+                disabled={isLocked || length <= LENGTH_MIN}
               >
                 <ArrowDown className="h-4 w-4" />
               </Button>
@@ -463,7 +525,7 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
                   e.stopPropagation();
                   handleLengthIncrement();
                 }}
-                disabled={length >= LENGTH_MAX}
+                disabled={isLocked || length >= LENGTH_MAX}
               >
                 <ArrowUp className="h-4 w-4" />
               </Button>
@@ -476,59 +538,63 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
             max={LENGTH_MAX}
             step={STEP_SIZE}
             className="w-full"
+            disabled={isLocked}
           />
         </div>
 
-        {/* Width Control */}
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <Label className="text-sm font-medium">Width (mm)</Label>
-            <div className="flex items-center gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                className="h-7 w-7 hover:bg-primary hover:text-primary-foreground transition-colors"
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  handleWidthDecrement();
-                }}
-                disabled={width <= WIDTH_MIN}
-              >
-                <ArrowDown className="h-4 w-4" />
-              </Button>
-              <span className="text-sm font-medium min-w-[3rem] text-center">
-                {width}
-              </span>
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                className="h-7 w-7 hover:bg-primary hover:text-primary-foreground transition-colors"
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  handleWidthIncrement();
-                }}
-                disabled={width >= WIDTH_MAX}
-              >
-                <ArrowUp className="h-4 w-4" />
-              </Button>
+        {/* Width Control - Hidden for rods */}
+        {!isRodType && (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <Label className="text-sm font-medium">Width (mm)</Label>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className="h-7 w-7 hover:bg-primary hover:text-primary-foreground transition-colors"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    handleWidthDecrement();
+                  }}
+                  disabled={isLocked || width <= WIDTH_MIN}
+                >
+                  <ArrowDown className="h-4 w-4" />
+                </Button>
+                <span className="text-sm font-medium min-w-[3rem] text-center">
+                  {width}
+                </span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className="h-7 w-7 hover:bg-primary hover:text-primary-foreground transition-colors"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    handleWidthIncrement();
+                  }}
+                  disabled={isLocked || width >= WIDTH_MAX}
+                >
+                  <ArrowUp className="h-4 w-4" />
+                </Button>
+              </div>
             </div>
+            <Slider
+              value={[width]}
+              onValueChange={handleWidthSliderChange}
+              min={WIDTH_MIN}
+              max={WIDTH_MAX}
+              step={STEP_SIZE}
+              className="w-full"
+              disabled={isLocked}
+            />
           </div>
-          <Slider
-            value={[width]}
-            onValueChange={handleWidthSliderChange}
-            min={WIDTH_MIN}
-            max={WIDTH_MAX}
-            step={STEP_SIZE}
-            className="w-full"
-          />
-        </div>
+        )}
 
-        {/* Height Control */}
-        {selectedComponent.dimensions.height !== undefined && (
+        {/* Height Control - Hidden for rods */}
+        {!isRodType && selectedComponent.dimensions.height !== undefined && (
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <Label className="text-sm font-medium">Height (mm)</Label>
@@ -543,7 +609,7 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
                     e.stopPropagation();
                     handleHeightDecrement();
                   }}
-                  disabled={height <= HEIGHT_MIN}
+                  disabled={isLocked || height <= HEIGHT_MIN}
                 >
                   <ArrowDown className="h-4 w-4" />
                 </Button>
@@ -560,7 +626,7 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
                     e.stopPropagation();
                     handleHeightIncrement();
                   }}
-                  disabled={height >= HEIGHT_MAX}
+                  disabled={isLocked || height >= HEIGHT_MAX}
                 >
                   <ArrowUp className="h-4 w-4" />
                 </Button>
@@ -573,6 +639,7 @@ export const AdjustDimensions = ({ selectedComponent, onUpdateComponent }: Adjus
               max={HEIGHT_MAX}
               step={STEP_SIZE}
               className="w-full"
+              disabled={isLocked}
             />
           </div>
         )}

@@ -30,6 +30,14 @@ type SceneComponent = {
   rotation?: [number, number, number];
   processing_status?: string;
   processing_error?: string;
+  linkedTo?: string; // ID of the component this is linked/merged with
+  isLocked?: boolean; // Whether this link is locked (merged)
+  groupId?: string | null; // ID of the group this component belongs to
+};
+
+type ComponentGroup = {
+  id: string;
+  componentIds: string[];
 };
 
 const Builder = () => {
@@ -46,6 +54,13 @@ const Builder = () => {
   const [viewMode, setViewMode] = useState<'focused' | 'shopfloor'>('focused');
   const [showGrid, setShowGrid] = useState<boolean>(true);
   const [sceneComponents, setSceneComponents] = useState<SceneComponent[]>([]);
+  const [groups, setGroups] = useState<ComponentGroup[]>([]);
+  const groupsRef = useRef<ComponentGroup[]>([]);
+  
+  // Keep groupsRef in sync with groups state
+  useEffect(() => {
+    groupsRef.current = groups;
+  }, [groups]);
   const [currentProjectId, setCurrentProjectId] = useState<number | null>(
     id && id !== 'demo' ? parseInt(id, 10) : null
   );
@@ -295,6 +310,7 @@ const Builder = () => {
               rotation: [item.rotation_x || 0, item.rotation_y || 0, item.rotation_z || 0] as [number, number, number],
               processing_status: item.component.processing_status,
               processing_error: item.component.processing_error,
+              groupId: item.metadata?.groupId || null,
             };
           });
           
@@ -315,8 +331,30 @@ const Builder = () => {
           console.log('Component IDs:', finalUniqueComponents.map(c => c.id));
           console.log('Component names:', finalUniqueComponents.map(c => c.name));
           
+          // Reconstruct groups from loaded components
+          const groupMap = new Map<string, string[]>(); // groupId -> componentIds
+          finalUniqueComponents.forEach(comp => {
+            if (comp.groupId) {
+              if (!groupMap.has(comp.groupId)) {
+                groupMap.set(comp.groupId, []);
+              }
+              groupMap.get(comp.groupId)!.push(comp.id);
+            }
+          });
+          
+          const reconstructedGroups: ComponentGroup[] = Array.from(groupMap.entries()).map(([groupId, componentIds]) => ({
+            id: groupId,
+            componentIds: componentIds,
+            position: [0, 0, 0] as [number, number, number],
+            rotation: [0, 0, 0] as [number, number, number],
+            scale: [1, 1, 1] as [number, number, number],
+          }));
+          
+          console.log('✅ Reconstructed groups:', reconstructedGroups.length, reconstructedGroups);
+          
           // Always set components when loading (even if empty array)
           setSceneComponents(finalUniqueComponents);
+          setGroups(reconstructedGroups);
           // Initialize history with loaded components
           setHistory([finalUniqueComponents]);
           setHistoryIndex(0);
@@ -387,6 +425,107 @@ const Builder = () => {
     totalCost: 0
   }));
 
+  // Find paired component for lock/unlock UI
+  const findPairedComponent = useCallback((componentId: string): SceneComponent | null => {
+    const component = sceneComponents.find(c => c.id === componentId);
+    if (!component) {
+      console.log('🔍 findPairedComponent: Component not found:', componentId);
+      return null;
+    }
+
+    const compName = (component.name || '').toLowerCase();
+    const compCategory = (component.category || '').toLowerCase();
+    
+    console.log('🔍 findPairedComponent: Looking for pair for', component.name, 'at', component.position);
+    
+    // Find components that are likely pairs (same type, opposite sides, etc.)
+    const candidates = sceneComponents.filter(c => {
+      if (c.id === componentId) return false;
+      
+      const cName = (c.name || '').toLowerCase();
+      const cCategory = (c.category || '').toLowerCase();
+      
+      // Check if same component type (e.g., both are "Fixed Legs")
+      const isSameType = compName === cName || 
+                        (compName.includes('leg') && cName.includes('leg')) ||
+                        (compName.includes('rod') && cName.includes('rod')) ||
+                        (compName.includes('bed') && cName.includes('bed'));
+      
+      if (!isSameType) return false;
+      
+      // Calculate distance
+      const dx = component.position[0] - c.position[0];
+      const dy = component.position[1] - c.position[1];
+      const dz = component.position[2] - c.position[2];
+      const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      
+      // Prefer components that are reasonably close (within 5 units) and on opposite sides
+      // For legs, check if they're on opposite sides of a bed
+      if (compName.includes('leg') || compName.includes('fixed')) {
+        // Check if they're roughly aligned in one axis but separated in another
+        const horizontalDistance = Math.sqrt(dx * dx + dz * dz);
+        const verticalDistance = Math.abs(dy);
+        
+        // Legs should be on opposite sides (large horizontal distance, small vertical)
+        // More lenient: allow up to 20 units horizontal distance
+        if (horizontalDistance > 0.5 && horizontalDistance < 20 && verticalDistance < 1.0) {
+          console.log('🔍 Found leg candidate:', c.name, 'at', c.position, 'distance:', horizontalDistance);
+          return true;
+        }
+      }
+      
+      // For other components, just check proximity - more lenient
+      if (distance < 10 && distance > 0.1) {
+        console.log('🔍 Found candidate:', c.name, 'at', c.position, 'distance:', distance);
+        return true;
+      }
+      
+      return false;
+    });
+    
+    console.log('🔍 findPairedComponent: Found', candidates.length, 'candidates');
+    
+    if (candidates.length === 0) {
+      // Fallback: find the nearest component of any type (within reasonable distance)
+      console.log('🔍 findPairedComponent: No same-type candidates, looking for nearest component');
+      const allCandidates = sceneComponents
+        .filter(c => c.id !== componentId)
+        .map(c => {
+          const dx = component.position[0] - c.position[0];
+          const dy = component.position[1] - c.position[1];
+          const dz = component.position[2] - c.position[2];
+          const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+          return { component: c, distance };
+        })
+        .filter(item => item.distance < 15 && item.distance > 0.1)
+        .sort((a, b) => a.distance - b.distance);
+      
+      if (allCandidates.length > 0) {
+        console.log('🔍 findPairedComponent: Found nearest component:', allCandidates[0].component.name, 'at', allCandidates[0].component.position, 'distance:', allCandidates[0].distance);
+        return allCandidates[0].component;
+      }
+      return null;
+    }
+    
+    // Return the closest candidate
+    const closest = candidates.reduce((closest, current) => {
+      const dist1 = Math.sqrt(
+        Math.pow(component.position[0] - closest.position[0], 2) +
+        Math.pow(component.position[1] - closest.position[1], 2) +
+        Math.pow(component.position[2] - closest.position[2], 2)
+      );
+      const dist2 = Math.sqrt(
+        Math.pow(component.position[0] - current.position[0], 2) +
+        Math.pow(component.position[1] - current.position[1], 2) +
+        Math.pow(component.position[2] - current.position[2], 2)
+      );
+      return dist1 < dist2 ? closest : current;
+    });
+    
+    console.log('🔍 findPairedComponent: Selected closest:', closest.name, 'at', closest.position);
+    return closest;
+  }, [sceneComponents]);
+
   const handleSelectComponent = (id: string) => {
     // Find component in scene
     const comp = sceneComponents.find(c => c.id === id);
@@ -397,21 +536,57 @@ const Builder = () => {
       
       // Calculate dimensions from bounding box if not preserving existing
       let dimensions = existingDimensions;
+      
+      // Check if this is a rod component
+      const compName = (comp.name || '').toLowerCase();
+      const compCategory = (comp.category || '').toLowerCase();
+      const isRod = compName.includes('rod') || compCategory.includes('rod');
+      const isVerticalRod = (compName.includes('vertical') && isRod) || (compCategory.includes('vertical') && isRod);
+      const isHorizontalRod = (compName.includes('horizontal') && isRod) || (compCategory.includes('horizontal') && isRod);
+      
       if (!dimensions && comp.bounding_box) {
         const width = Math.abs((comp.bounding_box.max?.[0] || 0) - (comp.bounding_box.min?.[0] || 0));
         const height = Math.abs((comp.bounding_box.max?.[1] || 0) - (comp.bounding_box.min?.[1] || 0));
         const length = Math.abs((comp.bounding_box.max?.[2] || 0) - (comp.bounding_box.min?.[2] || 0));
         
-        // Only use calculated dimensions if they're reasonable (not too small)
-        // This prevents using incorrect bounding boxes that might be from the component template
-        if (width > 10 && height > 10 && length > 10) {
-          dimensions = { width, height, length };
+        // For rods, use small defaults for width/length to prevent incorrect values from bounding box
+        if (isRod) {
+          if (isVerticalRod) {
+            // Vertical rod: height is the main dimension, width and length should be small
+            dimensions = { 
+              width: (width > 10 && width < 200) ? width : 50, 
+              height: (height > 10) ? height : 1300, 
+              length: (length > 10 && length < 200) ? length : 50 
+            };
+          } else {
+            // Horizontal rod: length is the main dimension, width and height should be small
+            dimensions = { 
+              width: (width > 10 && width < 200) ? width : 50, 
+              height: (height > 10 && height < 200) ? height : 50, 
+              length: (length > 10) ? length : 1000 
+            };
+          }
         } else {
-          // Use reasonable defaults if bounding box seems wrong
-          dimensions = { width: 450, height: 300, length: 350 };
+          // Only use calculated dimensions if they're reasonable (not too small)
+          // This prevents using incorrect bounding boxes that might be from the component template
+          if (width > 10 && height > 10 && length > 10) {
+            dimensions = { width, height, length };
+          } else {
+            // Use reasonable defaults if bounding box seems wrong
+            dimensions = { width: 450, height: 300, length: 350 };
+          }
         }
       } else if (!dimensions) {
-        dimensions = { width: 450, height: 300, length: 350 };
+        // Use defaults based on component type
+        if (isRod) {
+          if (isVerticalRod) {
+            dimensions = { width: 50, height: 1300, length: 50 };
+          } else {
+            dimensions = { width: 50, height: 50, length: 1000 };
+          }
+        } else {
+          dimensions = { width: 450, height: 300, length: 350 };
+        }
       }
       
       setSelectedComponent({
@@ -445,7 +620,6 @@ const Builder = () => {
     
     console.log('🚀 handleAddComponent called with:', component);
     console.log('🚀 Drop position:', component.position);
-    console.log('🚀 Bounding box:', component.bounding_box);
     console.log('🚀 currentProjectId:', currentProjectId);
     
     // Store the drop position and bounding_box to preserve them
@@ -612,6 +786,8 @@ const Builder = () => {
         // Use the drop position (calculated via raycasting), not the backend position
         position: dropPosition as [number, number, number],
         rotation: [assemblyItem.rotation_x || 0, assemblyItem.rotation_y || 0, assemblyItem.rotation_z || 0] as [number, number, number],
+        // Preserve linkedTo if it was passed (for auto-grouping)
+        ...(component.linkedTo ? { linkedTo: component.linkedTo } : {}),
       };
       
 
@@ -663,6 +839,34 @@ const Builder = () => {
       // Track this component ID to prevent duplicates
       addedComponentIdsRef.current.add(newComponent.id);
       
+      // Auto-group Fixed Legs with frames/beds if they were placed at an attach point
+      const componentName = (newComponent.name || '').toLowerCase();
+      const componentCategory = (newComponent.category || '').toLowerCase();
+      const isFixedLeg = componentName.includes('fixed') && 
+                        (componentName.includes('leg') || componentCategory.includes('leg'));
+      
+      if (isFixedLeg && (component as any).linkedTo) {
+        // Find the frame/bed component that this leg should be grouped with
+        const frameId = (component as any).linkedTo;
+        // Wait for component to be added to state, then group
+        setTimeout(() => {
+          setSceneComponents(prev => {
+            const frame = prev.find(c => c.id === frameId);
+            const leg = prev.find(c => c.id === newComponent.id);
+            if (frame && leg) {
+              // Use handleLockComponents to group them
+              handleLockComponents(newComponent.id, frameId);
+              console.log('🔗 Auto-grouped Fixed Leg with frame:', {
+                legId: newComponent.id,
+                frameId: frameId,
+                frameName: frame.name
+              });
+            }
+            return prev;
+          });
+        }, 200);
+      }
+      
       // Small delay before allowing auto-save to prevent race conditions
       setTimeout(() => {
         isAddingComponentRef.current = false;
@@ -677,26 +881,103 @@ const Builder = () => {
   };
 
   const handleUpdateComponent = async (id: string, update: Partial<SceneComponent>) => {
-    setSceneComponents(prev => prev.map(c => {
-      if (c.id === id) {
-        // Create a deep copy to ensure React detects nested object changes (like bounding_box)
-        const updated = { ...c, ...update };
-        // If bounding_box is being updated, ensure it's a new object reference
-        if (update.bounding_box) {
-          updated.bounding_box = {
-            min: [...(update.bounding_box.min || c.bounding_box?.min || [0, 0, 0])],
-            max: [...(update.bounding_box.max || c.bounding_box?.max || [0, 0, 0])]
-          };
-        }
-        console.log('🔄 handleUpdateComponent called:', {
-          id,
-          update,
-          newBoundingBox: updated.bounding_box
-        });
-        return updated;
+    // Use functional update to ensure we have the latest state
+    setSceneComponents(prev => {
+      const component = prev.find(c => c.id === id);
+      if (!component) {
+        console.warn('🔧 handleUpdateComponent: Component not found:', id);
+        return prev;
       }
-      return c;
-    }));
+      
+      console.log('🔧 handleUpdateComponent:', id, 'groupId:', component.groupId, 'update:', update);
+      
+      // If component is in a group and position/rotation is being updated, update all group members
+      if (component.groupId && (update.position || update.rotation)) {
+        // Use ref to get latest groups state
+        const group = groupsRef.current.find(g => g.id === component.groupId);
+        if (group) {
+          console.log('🔧 Group found:', group.id, 'members:', group.componentIds);
+          
+          // Calculate the offset if position changed
+          let positionOffset: [number, number, number] | null = null;
+          if (update.position && component.position) {
+            positionOffset = [
+              update.position[0] - component.position[0],
+              update.position[1] - component.position[1],
+              update.position[2] - component.position[2],
+            ];
+            console.log('🔧 Position offset:', positionOffset);
+          }
+          
+          // Calculate rotation offset if rotation changed
+          let rotationOffset: [number, number, number] | null = null;
+          if (update.rotation && component.rotation) {
+            rotationOffset = [
+              update.rotation[0] - (component.rotation[0] || 0),
+              update.rotation[1] - (component.rotation[1] || 0),
+              update.rotation[2] - (component.rotation[2] || 0),
+            ];
+            console.log('🔧 Rotation offset:', rotationOffset);
+          }
+          
+          // Update all components in the group
+          return prev.map(c => {
+            if (c.id === id) {
+              // Update the main component
+              const updatedComp = { ...c, ...update };
+              if (update.bounding_box) {
+                updatedComp.bounding_box = {
+                  min: [...(update.bounding_box.min || c.bounding_box?.min || [0, 0, 0])],
+                  max: [...(update.bounding_box.max || c.bounding_box?.max || [0, 0, 0])]
+                };
+              }
+              console.log('🔧 Updated main component:', c.name, 'new position:', updatedComp.position);
+              return updatedComp;
+            } else if (group.componentIds.includes(c.id)) {
+              // Update other group members with the same offset
+              const updatedComp = { ...c };
+              if (positionOffset) {
+                updatedComp.position = [
+                  c.position[0] + positionOffset[0],
+                  c.position[1] + positionOffset[1],
+                  c.position[2] + positionOffset[2],
+                ] as [number, number, number];
+                console.log('🔧 Updated group member:', c.name, 'old position:', c.position, 'new position:', updatedComp.position);
+              }
+              if (rotationOffset) {
+                updatedComp.rotation = [
+                  (c.rotation?.[0] || 0) + rotationOffset[0],
+                  (c.rotation?.[1] || 0) + rotationOffset[1],
+                  (c.rotation?.[2] || 0) + rotationOffset[2],
+                ] as [number, number, number];
+                console.log('🔧 Updated group member rotation:', c.name, 'new rotation:', updatedComp.rotation);
+              }
+              return updatedComp;
+            }
+            return c;
+          });
+        } else {
+          console.warn('🔧 Group not found for groupId:', component.groupId);
+        }
+      }
+      
+      // Single component update (not in group or non-position/rotation update)
+      return prev.map(c => {
+        if (c.id === id) {
+          // Create a deep copy to ensure React detects nested object changes (like bounding_box)
+          const updated = { ...c, ...update };
+          // If bounding_box is being updated, ensure it's a new object reference
+          if (update.bounding_box) {
+            updated.bounding_box = {
+              min: [...(update.bounding_box.min || c.bounding_box?.min || [0, 0, 0])],
+              max: [...(update.bounding_box.max || c.bounding_box?.max || [0, 0, 0])]
+            };
+          }
+          return updated;
+        }
+        return c;
+      });
+    });
     
     // Auto-save is now handled by the global auto-save system
     // No need to save individual updates here - the useEffect will trigger auto-save
@@ -747,7 +1028,56 @@ const Builder = () => {
       return;
     }
 
-    // Remove from local state immediately
+    const component = sceneComponents.find(c => c.id === id);
+    
+    // If component is in a group, delete the entire group
+    if (component?.groupId) {
+      const group = groups.find(g => g.id === component.groupId);
+      if (group) {
+        // Delete all components in the group
+        const groupComponentIds = group.componentIds;
+        setSceneComponents(prev => prev.filter(c => !groupComponentIds.includes(c.id)));
+        
+        // Remove the group
+        setGroups(prev => prev.filter(g => g.id !== component.groupId));
+        
+        // Clear selection if deleted component was selected
+        if (selectedComponent && groupComponentIds.includes(selectedComponent.id)) {
+          setSelectedComponent(null);
+        }
+        
+        // Delete all group components from backend
+        groupComponentIds.forEach(compId => {
+          const comp = sceneComponents.find(c => c.id === compId);
+          if (comp) {
+            let componentId: string;
+            if (compId.startsWith('comp-')) {
+              componentId = compId.replace('comp-', '');
+            } else {
+              componentId = compId;
+            }
+            
+            if (!componentId || isNaN(parseInt(componentId, 10))) {
+              console.error('Invalid component ID format:', compId);
+              return;
+            }
+            
+            const url = `${API_BASE}/api/assembly-items/${componentId}/?project_id=${currentProjectId}`;
+            fetch(url, {
+              method: 'DELETE',
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' },
+            }).catch(error => {
+              console.error(`Error deleting component ${componentId}:`, error);
+            });
+          }
+        });
+        
+        return;
+      }
+    }
+
+    // Remove from local state immediately (single component, not in group)
     setSceneComponents(prev => prev.filter(c => c.id !== id));
     
     // Clear selection if the deleted component was selected
@@ -896,6 +1226,7 @@ const Builder = () => {
               category: c.category,
               bounding_box: c.bounding_box,
               center: c.center,
+              groupId: c.groupId || null,
             },
           };
         })
@@ -1076,6 +1407,64 @@ const Builder = () => {
   const handleSettings = useCallback(() => {
     setShowSettingsPanel(!showSettingsPanel);
   }, [showSettingsPanel]);
+
+  const handleClearAll = useCallback(async () => {
+    if (!currentProjectId) {
+      console.error('No project loaded, cannot clear components');
+      return;
+    }
+
+    // Confirm with user
+    if (!window.confirm('Are you sure you want to clear all components? This action cannot be undone.')) {
+      return;
+    }
+
+    try {
+      // Delete all components from backend
+      const componentIds = sceneComponents.map(c => {
+        const id = c.id.startsWith('comp-') ? c.id.replace('comp-', '') : c.id;
+        return parseInt(id, 10);
+      }).filter(id => !isNaN(id));
+
+      console.log('🗑️ Clearing all components:', componentIds.length);
+
+      // Delete each component from backend
+      const deletePromises = componentIds.map(async (componentId) => {
+        try {
+          const url = `${API_BASE}/api/assembly-items/${componentId}/?project_id=${currentProjectId}`;
+          const response = await fetch(url, {
+            method: 'DELETE',
+            credentials: 'include',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+          });
+
+          if (!response.ok) {
+            console.error(`Failed to delete component ${componentId}:`, response.status);
+          }
+        } catch (error) {
+          console.error(`Error deleting component ${componentId}:`, error);
+        }
+      });
+
+      await Promise.all(deletePromises);
+
+      // Clear local state
+      setSceneComponents([]);
+      setSelectedComponent(null);
+      
+      // Reset history
+      setHistory([[]]);
+      setHistoryIndex(0);
+      prevComponentsRef.current = JSON.stringify([]);
+      addedComponentIdsRef.current = new Set();
+
+      console.log('✅ All components cleared');
+    } catch (error) {
+      console.error('Error clearing components:', error);
+    }
+  }, [currentProjectId, sceneComponents]);
   
   const handleSceneSettingsChange = useCallback((settings: SceneSettings) => {
     setSceneSettings(settings);
@@ -1084,6 +1473,52 @@ const Builder = () => {
   const handleResetSceneSettings = useCallback(() => {
     setSceneSettings(DEFAULT_SCENE_SETTINGS);
   }, []);
+
+  // Lock/unlock handlers - only prevent dimension changes, NOT grouping
+  // Components merge automatically when placed together (handled separately)
+  const handleLockComponents = useCallback((componentId1: string, componentId2: string) => {
+    const comp1 = sceneComponents.find(c => c.id === componentId1);
+    const comp2 = sceneComponents.find(c => c.id === componentId2);
+    
+    if (!comp1 || !comp2) return;
+    
+    // Only set isLocked flag to prevent dimension changes
+    // Do NOT group components - grouping happens automatically when placed together
+    setSceneComponents(prev => prev.map(c => 
+      c.id === componentId1 || c.id === componentId2 
+        ? { ...c, isLocked: true, linkedTo: c.id === componentId1 ? componentId2 : componentId1 }
+        : c
+    ));
+    
+    // Also update selectedComponent if it's one of the locked components
+    if (selectedComponent && (selectedComponent.id === componentId1 || selectedComponent.id === componentId2)) {
+      setSelectedComponent(prev => prev ? { ...prev, isLocked: true } : prev);
+    }
+    
+    console.log('🔒 Components locked (dimensions):', componentId1, componentId2);
+  }, [sceneComponents, selectedComponent]);
+
+  const handleUnlockComponents = useCallback((componentId1: string, componentId2: string) => {
+    const comp1 = sceneComponents.find(c => c.id === componentId1);
+    const comp2 = sceneComponents.find(c => c.id === componentId2);
+    
+    if (!comp1 || !comp2) return;
+    
+    // Only clear isLocked flag to allow dimension changes again
+    // Do NOT ungroup - grouping is separate from locking
+    setSceneComponents(prev => prev.map(c => 
+      c.id === componentId1 || c.id === componentId2 
+        ? { ...c, isLocked: false, linkedTo: undefined }
+        : c
+    ));
+    
+    // Also update selectedComponent if it's one of the unlocked components
+    if (selectedComponent && (selectedComponent.id === componentId1 || selectedComponent.id === componentId2)) {
+      setSelectedComponent(prev => prev ? { ...prev, isLocked: false } : prev);
+    }
+    
+    console.log('🔓 Components unlocked (dimensions):', componentId1, componentId2);
+  }, [sceneComponents, selectedComponent]);
 
   // Update activeTool when pan mode changes
   useEffect(() => {
@@ -1136,6 +1571,8 @@ const Builder = () => {
         onErase={handleErase}
         onSettings={handleSettings}
         panModeActive={panModeActive}
+        onClearAll={handleClearAll}
+        isReadonly={isReadonly}
       />
 
       {/* Main Content Area */}
@@ -1164,8 +1601,12 @@ const Builder = () => {
             viewMode={viewMode}
             showGrid={showGrid}
             components={sceneComponents}
+            groups={groups}
             onAddComponent={handleAddComponent}
             onUpdateComponent={handleUpdateComponent}
+            onLockComponents={handleLockComponents}
+            onUnlockComponents={handleUnlockComponents}
+            onFindPairedComponent={findPairedComponent}
             activeTool={activeTool}
             controlsRef={sceneControlsRef}
             sceneSettings={sceneSettings}
@@ -1199,13 +1640,29 @@ const Builder = () => {
                   selectedComponent={selectedComponent}
                   onDeleteComponent={handleDeleteComponent}
                   onUpdateComponent={(component) => {
+                    // Check if component is locked - if so, prevent dimension changes
+                    const sceneComp = sceneComponents.find(c => c.id === component.id);
+                    if (sceneComp?.isLocked) {
+                      console.log('🔒 Component is locked, preventing dimension changes:', component.id);
+                      // Still update other properties, but skip dimension updates
+                      setSelectedComponent(component);
+                      return;
+                    }
+                    
                     // Always update selectedComponent with the EXACT dimensions provided
                     // Do NOT recalculate from bounding box - use the values as-is
                     setSelectedComponent(component);
                     
                     // Also update the corresponding SceneComponent's bounding_box
                     // to reflect dimension changes in the 3D preview
-                    if (component.dimensions && component.id) {
+                    // Ensure dimensions exist - if not, create from component
+                    const hasDimensions = component.dimensions && (
+                      component.dimensions.width !== undefined || 
+                      component.dimensions.height !== undefined || 
+                      component.dimensions.length !== undefined
+                    );
+                    
+                    if (hasDimensions && component.id) {
                       const sceneComp = sceneComponents.find(c => c.id === component.id);
                       if (sceneComp) {
                         // Calculate center based on existing bounding box if present, else use current position
@@ -1217,6 +1674,14 @@ const Builder = () => {
                           (oldMin[2] + oldMax[2]) / 2,
                         ];
                         
+                        // Check if this is a rod component
+                        const componentName = (component.name || '').toLowerCase();
+                        const componentCategory = (component.type || '').toLowerCase();
+                        const isRod = componentName.includes('rod') || componentCategory.includes('rod');
+                        const isVerticalRod = (componentName.includes('vertical') && isRod) || (componentCategory.includes('vertical') && isRod);
+                        const isHorizontalRod = (componentName.includes('horizontal') && isRod) || (componentCategory.includes('horizontal') && isRod);
+                        const isRodType = isVerticalRod || isHorizontalRod;
+                        
                         // Use the EXACT provided dimension values - do NOT recalculate from bounding box
                         // This ensures we use the values from AdjustDimensions component
                         // IMPORTANT: Preserve existing dimensions if not provided (so changing one doesn't affect others)
@@ -1224,19 +1689,97 @@ const Builder = () => {
                         const existingHeight = Math.abs(oldMax[1] - oldMin[1]);
                         const existingLength = Math.abs(oldMax[2] - oldMin[2]);
                         
-                        // Only update dimensions that are explicitly provided, preserve others
-                        const newWidth = (component.dimensions.width !== undefined && component.dimensions.width !== null && component.dimensions.width > 0)
-                          ? Number(component.dimensions.width)
-                          : (existingWidth > 0 ? existingWidth : 500); // Preserve existing or use default
-                        const newHeight = (component.dimensions.height !== undefined && component.dimensions.height !== null && component.dimensions.height > 0)
-                          ? Number(component.dimensions.height)
-                          : (existingHeight > 0 ? existingHeight : 300); // Preserve existing or use default
-                        const newLength = (component.dimensions.length !== undefined && component.dimensions.length !== null && component.dimensions.length > 0)
-                          ? Number(component.dimensions.length)
-                          : (existingLength > 0 ? existingLength : 1000); // Preserve existing or use default
+                        let newWidth: number;
+                        let newHeight: number;
+                        let newLength: number;
+                        
+                        if (isRodType) {
+                          // For rods, check the appropriate dimension based on type
+                          // For vertical rods, check if we have a height value to update
+                          if (isVerticalRod) {
+                            // Vertical Rod: height dimension maps to height (Y axis)
+                            // CRITICAL: For vertical rods, the slider value is stored in component.dimensions.height
+                            // We MUST use this value to update the bounding box height
+                            let rodHeight: number;
+                            
+                            // Check if height is provided in dimensions (this comes from the slider)
+                            const providedHeight = component.dimensions?.height;
+                            if (providedHeight !== undefined && providedHeight !== null && !isNaN(Number(providedHeight))) {
+                              // Use the height value from dimensions (slider value) - this is the key!
+                              rodHeight = Math.max(Number(providedHeight), 1); // Ensure at least 1mm
+                            } else {
+                              // Only fall back to existing if height is not provided at all
+                              rodHeight = existingHeight > 0 ? existingHeight : 1300;
+                            }
+                            
+                            // CRITICAL: For vertical rods, ALWAYS preserve width and length from component.dimensions
+                            // Do NOT recalculate from bounding box as it might be incorrect
+                            // If dimensions are not provided, use small defaults (typical rod dimensions)
+                            let preservedWidth: number;
+                            let preservedLength: number;
+                            
+                            // Always use component.dimensions.width if available (even if 0)
+                            if (component.dimensions.width !== undefined && component.dimensions.width !== null) {
+                              preservedWidth = Math.max(Number(component.dimensions.width), 1);
+                            } else {
+                              // If not in dimensions, check if we have a stored value, otherwise use default
+                              preservedWidth = 50; // Default small width for rod
+                            }
+                            
+                            // Always use component.dimensions.length if available (even if 0)
+                            if (component.dimensions.length !== undefined && component.dimensions.length !== null) {
+                              preservedLength = Math.max(Number(component.dimensions.length), 1);
+                            } else {
+                              // If not in dimensions, use default
+                              preservedLength = 50; // Default small depth for rod
+                            }
+                            
+                            newWidth = preservedWidth;
+                            newHeight = rodHeight;
+                            newLength = preservedLength;
+                          } else if (isHorizontalRod && component.dimensions.length !== undefined && component.dimensions.length !== null && component.dimensions.length > 0) {
+                            // Horizontal Rod: length dimension maps to length (Z axis)
+                            const rodLength = Number(component.dimensions.length);
+                            // Preserve width and height
+                            const preservedWidth = component.dimensions.width !== undefined && component.dimensions.width > 0
+                              ? Number(component.dimensions.width)
+                              : (existingWidth > 0 ? existingWidth : 50);
+                            const preservedHeight = component.dimensions.height !== undefined && component.dimensions.height > 0
+                              ? Number(component.dimensions.height)
+                              : (existingHeight > 0 ? existingHeight : 50);
+                            
+                            newWidth = preservedWidth;
+                            newHeight = preservedHeight;
+                            newLength = rodLength;
+                          } else {
+                            // No dimension provided, preserve existing
+                            newWidth = existingWidth > 0 ? existingWidth : 50;
+                            newHeight = existingHeight > 0 ? existingHeight : 50;
+                            newLength = existingLength > 0 ? existingLength : 50;
+                          }
+                        } else {
+                          // For non-rods or when length is not provided, use standard mapping
+                          newWidth = (component.dimensions.width !== undefined && component.dimensions.width !== null && component.dimensions.width > 0)
+                            ? Number(component.dimensions.width)
+                            : (existingWidth > 0 ? existingWidth : 500); // Preserve existing or use default
+                          newHeight = (component.dimensions.height !== undefined && component.dimensions.height !== null && component.dimensions.height > 0)
+                            ? Number(component.dimensions.height)
+                            : (existingHeight > 0 ? existingHeight : 300); // Preserve existing or use default
+                          newLength = (component.dimensions.length !== undefined && component.dimensions.length !== null && component.dimensions.length > 0)
+                            ? Number(component.dimensions.length)
+                            : (existingLength > 0 ? existingLength : 1000); // Preserve existing or use default
+                        }
                         
                         // Validate dimensions are reasonable (prevent huge jumps)
-                        if (newWidth > 1000 || newHeight > 2000 || newLength > 5000) {
+                        // But allow height up to 5000mm for tall vertical rods
+                        if (newWidth > 1000 || newLength > 5000) {
+                          return; // Reject suspicious values
+                        }
+                        // For vertical rods, allow height up to 5000mm; for others, max 2000mm
+                        if (isVerticalRod && newHeight > 5000) {
+                          return; // Reject suspicious values
+                        }
+                        if (!isVerticalRod && newHeight > 2000) {
                           return; // Reject suspicious values
                         }
                         
@@ -1246,30 +1789,75 @@ const Builder = () => {
                         const validHeight = Math.max(newHeight, 1);
                         const validLength = Math.max(newLength, 1);
                         
+                        // For vertical rods, preserve the bottom Y position when height changes
+                        // This prevents the rod from jumping when length is adjusted
+                        let newCenterY = oldCenter[1];
+                        if (isVerticalRod) {
+                          // For vertical rods, keep the bottom at the same position
+                          // oldBottom = oldCenter[1] - oldHeight/2
+                          // newCenter[1] = oldBottom + newHeight/2
+                          const oldHeight = Math.abs(oldMax[1] - oldMin[1]);
+                          const oldBottom = oldCenter[1] - (oldHeight / 2);
+                          newCenterY = oldBottom + (validHeight / 2);
+                        }
+                        
                         // Bounding box values are in mm, but we need to ensure they're properly formatted
                         // The Scene component will convert mm to grid units (1 grid unit = 100mm)
                         const newBoundingBox = {
                           min: [
                             oldCenter[0] - validWidth / 2,
-                            oldCenter[1] - validHeight / 2,
+                            newCenterY - validHeight / 2,
                             oldCenter[2] - validLength / 2,
                           ],
                           max: [
                             oldCenter[0] + validWidth / 2,
-                            oldCenter[1] + validHeight / 2,
+                            newCenterY + validHeight / 2,
                             oldCenter[2] + validLength / 2,
                           ],
                         };
                         
-                        console.log('📏 Updating component dimensions:', {
-                          componentId: component.id,
-                          dimensions: { width: validWidth, height: validHeight, length: validLength },
-                          boundingBox: newBoundingBox
-                        });
+                        // For vertical rods, we may need to adjust the component position to keep bottom fixed
+                        // But only if the rod is not locked to a wheel (locked rods have fixed Y position)
+                        let positionUpdate: Partial<SceneComponent> | undefined = undefined;
+                        if (isVerticalRod && sceneComp.linkedTo) {
+                          // Vertical rod is locked - position is managed by the lock system
+                          // Don't update position
+                        } else if (isVerticalRod) {
+                          // For unlocked vertical rods, adjust Y position to keep bottom fixed
+                          const oldHeight = Math.abs(oldMax[1] - oldMin[1]);
+                          const oldBottom = oldCenter[1] - (oldHeight / 2);
+                          const newBottom = newCenterY - (validHeight / 2);
+                          const yOffset = newBottom - oldBottom;
+                          
+                          if (Math.abs(yOffset) > 0.001) {
+                            positionUpdate = {
+                              position: [
+                                sceneComp.position[0],
+                                sceneComp.position[1] + (yOffset / 100), // Convert mm to grid units
+                                sceneComp.position[2]
+                              ] as [number, number, number]
+                            };
+                          }
+                        }
                         
-                        handleUpdateComponent(component.id, {
+                        // Also update the component's dimensions in the scene component for future reference
+                        // This ensures width/length are preserved for rods
+                        const dimensionUpdate: any = {
                           bounding_box: newBoundingBox,
-                        });
+                          ...positionUpdate
+                        };
+                        
+                        // Store dimensions on the scene component for rods to preserve them
+                        // This is critical to prevent width/length from being recalculated incorrectly
+                        if (isRodType) {
+                          dimensionUpdate.dimensions = {
+                            width: validWidth,
+                            height: validHeight,
+                            length: validLength
+                          };
+                        }
+                        
+                        handleUpdateComponent(component.id, dimensionUpdate);
                       }
                     }
                   }}

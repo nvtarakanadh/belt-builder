@@ -27,6 +27,8 @@ export interface ConveyorComponent {
   processing_error?: string;
   glb_url?: string | null;
   original_url?: string | null;
+  isLocked?: boolean; // Lock dimension changes
+  linkedTo?: string; // ID of linked component (for lock relationship)
 }
 
 export interface BOMItem {

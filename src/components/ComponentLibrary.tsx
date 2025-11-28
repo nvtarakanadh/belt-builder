@@ -200,6 +200,17 @@ export const ComponentLibrary = ({ collapsed = false, onToggleCollapse }: Compon
                     e.dataTransfer.effectAllowed = 'copy';
                     e.dataTransfer.dropEffect = 'copy';
                     
+                    // Store component type in a custom format that can be read during dragOver
+                    // Use types array to store component category/name for detection
+                    const componentName = (component.name || '').toLowerCase();
+                    const isFixedLeg = [componentName, componentCategory].some((s) =>
+                      s.includes('leg') || s.includes('support') || s.includes('stand')
+                    );
+                    
+                    window.dispatchEvent(new CustomEvent('componentDragStart', { 
+                      detail: { component: dragData, isFixedLeg }
+                    }));
+                    
                     // Create custom drag image from the 3D preview canvas
                     // Note: setDragImage must be called synchronously during dragStart
                     try {

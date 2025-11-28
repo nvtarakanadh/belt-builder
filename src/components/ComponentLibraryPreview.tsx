@@ -2,6 +2,7 @@ import { Suspense, useEffect, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, PerspectiveCamera, useGLTF, Environment } from '@react-three/drei';
 import * as THREE from 'three';
+import { API_BASE } from '@/lib/config';
 
 interface ComponentLibraryPreviewProps {
   glbUrl?: string | null;
@@ -86,9 +87,20 @@ function PreviewContent({ glbUrl, originalUrl, apiBase }: ComponentLibraryPrevie
   // Format URLs to be absolute if needed
   let formattedGlbUrl = glbUrl;
   
-  if (apiBase && formattedGlbUrl && !formattedGlbUrl.startsWith('http')) {
-    formattedGlbUrl = `${apiBase}${formattedGlbUrl.startsWith('/') ? formattedGlbUrl : '/' + formattedGlbUrl}`;
-    console.log('🔗 Formatted GLB URL:', formattedGlbUrl);
+  // Always format URL if it's not already absolute
+  if (formattedGlbUrl && formattedGlbUrl.trim() !== '' && formattedGlbUrl !== 'null') {
+    if (!formattedGlbUrl.startsWith('http://') && !formattedGlbUrl.startsWith('https://')) {
+      // URL is relative, make it absolute
+      const baseUrl = apiBase || API_BASE;
+      if (baseUrl) {
+        formattedGlbUrl = `${baseUrl}${formattedGlbUrl.startsWith('/') ? formattedGlbUrl : '/' + formattedGlbUrl}`;
+        console.log('🔗 Formatted relative GLB URL to absolute:', formattedGlbUrl);
+      } else {
+        console.warn('⚠️ Cannot format URL - no API base URL available');
+      }
+    } else {
+      console.log('✅ GLB URL is already absolute:', formattedGlbUrl);
+    }
   }
 
   // Only try GLB files for simplicity
@@ -115,10 +127,18 @@ export function ComponentLibraryPreview({ glbUrl, originalUrl, category, apiBase
   useEffect(() => {
     if (glbUrl && glbUrl.trim() !== '' && glbUrl !== 'null') {
       let url = glbUrl;
-      if (apiBase && !url.startsWith('http')) {
-        url = `${apiBase}${url.startsWith('/') ? url : '/' + url}`;
+      // Always format URL if it's not already absolute
+      if (!url.startsWith('http://') && !url.startsWith('https://')) {
+        const baseUrl = apiBase || API_BASE;
+        if (baseUrl) {
+          url = `${baseUrl}${url.startsWith('/') ? url : '/' + url}`;
+          console.log('🔄 ComponentLibraryPreview - Formatted relative URL to absolute:', url);
+        } else {
+          console.warn('⚠️ ComponentLibraryPreview - Cannot format URL, no API base URL available');
+        }
+      } else {
+        console.log('✅ ComponentLibraryPreview - URL is already absolute:', url);
       }
-      console.log('🔄 ComponentLibraryPreview - Setting formatted URL:', url);
       setFormattedGlbUrl(url);
     } else {
       console.log('⚠️ ComponentLibraryPreview - No GLB URL provided');
@@ -173,7 +193,7 @@ export function ComponentLibraryPreview({ glbUrl, originalUrl, category, apiBase
             <directionalLight position={[3, 3, 3]} intensity={0.7} />
             <pointLight position={[-3, 3, -3]} intensity={0.3} />
             <Environment preset="warehouse" />
-            <PreviewContent glbUrl={formattedGlbUrl || glbUrl} originalUrl={originalUrl} apiBase={apiBase} />
+            <PreviewContent glbUrl={formattedGlbUrl} originalUrl={originalUrl} apiBase={apiBase} />
           </Canvas>
         </ErrorCatcher>
       </Suspense>

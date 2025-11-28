@@ -16,7 +16,7 @@ import { Moon, Sun } from 'lucide-react';
 export interface SceneSettings {
   viewMode: 'realistic' | 'orthographic' | 'wireframe';
   levelOfDetail: 'high' | 'medium' | 'low';
-  zoomTarget: 'center' | 'selection';
+  zoomTarget: 'center' | 'mouse';
   invertZoom: boolean;
   shadows: boolean;
   placementPreview: boolean;
@@ -140,7 +140,7 @@ export function SettingsPanel({
           <Label htmlFor="zoom-target">Zoom target</Label>
           <Select
             value={localSettings.zoomTarget}
-            onValueChange={(value: 'center' | 'selection') =>
+            onValueChange={(value: 'center' | 'mouse') =>
               updateSetting('zoomTarget', value)
             }
           >
@@ -149,7 +149,7 @@ export function SettingsPanel({
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="center">Center of screen</SelectItem>
-              <SelectItem value="selection">Selection</SelectItem>
+              <SelectItem value="mouse">Mouse Cursor</SelectItem>
             </SelectContent>
           </Select>
         </div>

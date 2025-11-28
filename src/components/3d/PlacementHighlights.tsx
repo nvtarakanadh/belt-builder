@@ -49,8 +49,8 @@ export function PlacementHighlights({ slots }: PlacementHighlightsProps) {
     });
     
     const hover = new THREE.MeshStandardMaterial({
-      color: 0x00ffff,
-      emissive: 0x00ffff,
+      color: 0x00b4d8,
+      emissive: 0x00b4d8,
       emissiveIntensity: 0.8,
       transparent: true,
       opacity: 1.0,
